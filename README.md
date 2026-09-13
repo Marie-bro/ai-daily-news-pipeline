@@ -1,42 +1,38 @@
-# AI Daily 新闻采集与标准化
+# AI Daily 新闻采集与双语整理
 
-Phase 3 的独立数据工程项目。它只从可追溯的官方来源采集 AI 资讯，完成正文抽取、时间筛选、URL/指纹/历史去重，并保存结构化数据。
+该独立项目完成了 Phase 3 的真实新闻采集与标准化，并在 Phase 4 增加一次批量 DeepSeek 双语整理。它只处理可追溯的官方来源，不会虚构新闻、链接或来源。
 
-本项目不会调用 DeepSeek，不会生成日报，不会向飞书推送，也不会修改现有 AI Daily 网站。双语整理属于 Phase 4。
+## 当前边界
 
-## 数据流程
+- 从官方 RSS、Atom、Newsroom 和 GitHub Release 获取候选，抽取正文并按发布时间、URL、正文指纹和本地历史去重。
+- 对已验证且尚未整理的少量候选，发出一次 DeepSeek 批量请求，得到严格校验的结构化双语内容。
+- 每个条目保存：中文标题、原文标题、来源、时间、原文链接、原文要点、中文翻译、中英文摘要、相关性与实用表达。
+- 来源、发布时间和原文 URL 始终来自本地已验证文章；模型返回的这些元数据不会被信任或覆盖。
+- 保存 DeepSeek 返回的实际 `prompt_tokens`、`completion_tokens`、`total_tokens`、`prompt_cache_hit_tokens`、`prompt_cache_miss_tokens` 和可用的 reasoning tokens；不估算用量。
+- 不修改 GitHub Pages 或飞书网页应用，不发送飞书消息，也不开始 Phase 5 的展示与历史归档。
 
-```text
-官方 RSS / Atom / Newsroom
-  -> 抓取候选链接
-  -> 正文抽取与清洗
-  -> 发布时限筛选（24 小时；不足时最多 72 小时）
-  -> URL、正文指纹与 SQLite 历史去重
-  -> 8–15 条结构化 AI 候选资讯
-```
+## 运行与验收
 
-## 使用
-
-使用本机 Python 启动器：
+在项目根目录运行：
 
 ```powershell
 py -3 -m unittest discover -s tests -p 'test_*.py' -v
-py -3 run_collect.py --dry-run
 py -3 run_collect.py
+py -3 run_enrichment.py --dry-run
+py -3 run_enrichment.py
 ```
 
-`--dry-run` 不写入数据库，运行结果会写到 `data/latest-run.json`。正式运行写入 `data/ai_daily.sqlite3`；这些运行数据不提交到 Git。
+`run_enrichment.py` 会复用相邻 `feishu-deepseek-assistant/.env` 中已有的 `DEEPSEEK_API_KEY`，或优先使用当前环境变量；密钥不会复制到本仓库，也不会输出。第一次真实运行只处理尚未整理的文章，避免重复调用。
 
-## 来源原则
+运行结果保存在被 Git 忽略的 `data/ai_daily.sqlite3` 与 `data/latest-enrichment.json`。`latest-enrichment.json` 可直接检查条目结构和 API 返回的实际用量。
 
-来源在 `config/sources.json` 中集中声明，当前只启用 OpenAI、Anthropic、Google AI 的官方页面或官方 Feed，以及 OpenAI Codex、OpenAI Python、Anthropic Python 的官方 GitHub Release Feed。每条保留原始 URL、来源、来源类型、发布时间、原文和清洗正文。无法确认发布时间、超出时间窗或正文为空的候选会被丢弃，不会由模型补写。
+## 输入与成本边界
 
-## 数据结构
+这些环境变量都可选：
 
-`articles` 表至少保存：`id`、`category`、`title`、`original_title`、`source`、`source_type`、`published_at`、`original_url`、`language`、`raw_text`、`clean_text`、`fingerprint`、`created_at`、`verification_status`。
+- `MAX_BATCH_ARTICLES`：单批文章上限，默认 `8`。
+- `MAX_NEWS_INPUT_CHARS_PER_ARTICLE`：每篇提交给模型的清洗正文上限，默认 `4000`。
+- `MAX_NEWS_OUTPUT_TOKENS`：单次模型最大输出，默认 `3500`。
+- `MAX_DAILY_TOKENS`：当日已记录实际总 token 达到此值后停止新的调用，默认 `40000`。
 
-## 与其他阶段的边界
-
-- Phase 2 / 2.5 的 GitHub Pages 页面和飞书网页应用保持不变。
-- Phase 4 才对已经标准化的少量候选做一次批量 DeepSeek 双语整理。
-- Phase 5 才将日报和归档展示接入飞书资讯中心。
+当可验证候选少于目标数量时，程序会处理实际可用的条目，不会补造内容。
