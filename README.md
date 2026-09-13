@@ -1,38 +1,26 @@
-# AI Daily 新闻采集与双语整理
+# AI Daily 数据流水线
 
-该独立项目完成了 Phase 3 的真实新闻采集与标准化，并在 Phase 4 增加一次批量 DeepSeek 双语整理。它只处理可追溯的官方来源，不会虚构新闻、链接或来源。
+该项目负责 AI Daily 的真实资讯采集、清洗、双语整理和静态日报数据发布。它只使用可追溯来源，并且不会虚构新闻、链接或来源。
 
-## 当前边界
+## 已完成能力
 
-- 从官方 RSS、Atom、Newsroom 和 GitHub Release 获取候选，抽取正文并按发布时间、URL、正文指纹和本地历史去重。
-- 对已验证且尚未整理的少量候选，发出一次 DeepSeek 批量请求，得到严格校验的结构化双语内容。
-- 每个条目保存：中文标题、原文标题、来源、时间、原文链接、原文要点、中文翻译、中英文摘要、相关性与实用表达。
-- 来源、发布时间和原文 URL 始终来自本地已验证文章；模型返回的这些元数据不会被信任或覆盖。
-- 保存 DeepSeek 返回的实际 `prompt_tokens`、`completion_tokens`、`total_tokens`、`prompt_cache_hit_tokens`、`prompt_cache_miss_tokens` 和可用的 reasoning tokens；不估算用量。
-- 不修改 GitHub Pages 或飞书网页应用，不发送飞书消息，也不开始 Phase 5 的展示与历史归档。
+- Phase 3：采集官方 RSS、Atom、Newsroom 和 GitHub Release，完成正文清洗、时间过滤和 URL/指纹/历史去重。
+- Phase 4：将少量已验证候选一次批量交给 DeepSeek，得到经严格校验的双语结构化内容，并记录 API 实际 token/cache 用量。
+- Phase 5：将最新已验证日报发布成现有飞书 H5 项目可读取的静态 JSON；按日期保存详情并更新历史索引。
 
-## 运行与验收
-
-在项目根目录运行：
+## 使用
 
 ```powershell
 py -3 -m unittest discover -s tests -p 'test_*.py' -v
 py -3 run_collect.py
-py -3 run_enrichment.py --dry-run
 py -3 run_enrichment.py
+py -3 run_publish.py
 ```
 
-`run_enrichment.py` 会复用相邻 `feishu-deepseek-assistant/.env` 中已有的 `DEEPSEEK_API_KEY`，或优先使用当前环境变量；密钥不会复制到本仓库，也不会输出。第一次真实运行只处理尚未整理的文章，避免重复调用。
+`run_publish.py` 不调用 DeepSeek。它读取 `data/latest-enrichment.json`，写入相邻 `ai-daily-public-site/data/daily/ai/YYYY-MM-DD.json`，并更新 `ai-daily-public-site/data/reports.json`。历史日期不会被新日报覆盖。
 
-运行结果保存在被 Git 忽略的 `data/ai_daily.sqlite3` 与 `data/latest-enrichment.json`。`latest-enrichment.json` 可直接检查条目结构和 API 返回的实际用量。
+`run_enrichment.py` 优先使用环境变量中的 `DEEPSEEK_API_KEY`，否则复用相邻 Phase 1 项目的本地 `.env`；密钥不会复制到本仓库或输出。
 
-## 输入与成本边界
+## 阶段边界
 
-这些环境变量都可选：
-
-- `MAX_BATCH_ARTICLES`：单批文章上限，默认 `8`。
-- `MAX_NEWS_INPUT_CHARS_PER_ARTICLE`：每篇提交给模型的清洗正文上限，默认 `4000`。
-- `MAX_NEWS_OUTPUT_TOKENS`：单次模型最大输出，默认 `3500`。
-- `MAX_DAILY_TOKENS`：当日已记录实际总 token 达到此值后停止新的调用，默认 `40000`。
-
-当可验证候选少于目标数量时，程序会处理实际可用的条目，不会补造内容。
+此项目不发送飞书机器人通知、不安排定时任务、不实现 IELTS 推送，也不构建 Token Dashboard。飞书页面只读取已发布的静态日报数据。
