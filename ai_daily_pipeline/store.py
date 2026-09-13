@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .models import Article, Enrichment
 
@@ -118,6 +119,19 @@ class ArticleStore:
             "SELECT COALESCE(SUM(total_tokens), 0) FROM model_usage WHERE created_at LIKE ?", (f"{day_prefix}%",)
         ).fetchone()
         return int(row[0])
+
+    def purge_articles_for_hosts(self, blocked_hosts: tuple[str, ...]) -> int:
+        rows = self.connection.execute("SELECT id, original_url FROM articles").fetchall()
+        article_ids = []
+        for article_id, original_url in rows:
+            hostname = (urlparse(original_url).hostname or "").lower()
+            if any(hostname == host or hostname.endswith("." + host) for host in blocked_hosts):
+                article_ids.append(article_id)
+        for article_id in article_ids:
+            self.connection.execute("DELETE FROM article_enrichments WHERE article_id = ?", (article_id,))
+            self.connection.execute("DELETE FROM articles WHERE id = ?", (article_id,))
+        self.connection.commit()
+        return len(article_ids)
 
     def usage_rows(self) -> list[dict[str, object]]:
         cursor = self.connection.execute("SELECT * FROM model_usage ORDER BY id")

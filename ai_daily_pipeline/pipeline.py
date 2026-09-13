@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .extract import extract_article
 from .models import Article, SourceItem
-from .sources import AI_TERMS, SourceDefinition, collect_source_items, fetch, load_sources
+from .sources import AI_TERMS, BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS, SourceDefinition, collect_source_items, fetch, load_sources
 from .store import ArticleStore
 from .text import article_id, fingerprint
 
@@ -36,7 +36,7 @@ def _collapse_release_bursts(articles: list[Article]) -> list[Article]:
     selected: dict[tuple[str, str, str], Article] = {}
     others: list[Article] = []
     for article in articles:
-        if article.source_type != "github_release":
+        if article.source_type != "official_changelog":
             others.append(article)
             continue
         key = (article.source, article.published_at[:10], "release")
@@ -53,6 +53,8 @@ def _candidate_to_article(item: SourceItem, now: datetime) -> Article | None:
     if not published or not extracted.clean_text or len(extracted.clean_text) < 120:
         return None
     title = extracted.title or item.title
+    if BLOCKED_CONTENT_TERMS.search(title + " " + extracted.clean_text[:3_000]):
+        return None
     # Feed indexes can contain generic company posts; retain only actual AI-relevant candidates.
     if not AI_TERMS.search(title + " " + extracted.clean_text[:3_000]):
         return None
@@ -117,6 +119,7 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
     if not dry_run:
         store = ArticleStore(root / "data" / "ai_daily.sqlite3")
         try:
+            store.purge_articles_for_hosts(BLOCKED_CONTENT_HOSTS)
             for article in articles:
                 inserted += int(store.add(article))
         finally:

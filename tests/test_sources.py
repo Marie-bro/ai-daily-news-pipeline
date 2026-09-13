@@ -1,6 +1,6 @@
 import unittest
 
-from ai_daily_pipeline.sources import SourceDefinition, _feed_items
+from ai_daily_pipeline.sources import SourceDefinition, _feed_items, load_sources
 
 
 class SourceTests(unittest.TestCase):
@@ -11,3 +11,12 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].source_type, "official_blog")
         self.assertIsNotNone(items[0].published_at)
+
+    def test_source_configuration_rejects_github_and_openai_content_hosts(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "sources.json"
+            path.write_text('[{"id":"blocked","name":"Blocked","source_type":"official","adapter":"html_index","url":"https://github.com/example","allow_hosts":["github.com"],"priority":1}]', encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_sources(path)

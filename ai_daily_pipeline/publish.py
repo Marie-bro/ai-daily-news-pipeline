@@ -5,6 +5,9 @@ from datetime import datetime
 from math import ceil
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from urllib.parse import urlparse
+
+from .sources import BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS
 
 
 class PublishError(RuntimeError):
@@ -35,6 +38,12 @@ def publish_latest_report(pipeline_root: Path, site_root: Path) -> Path:
     items = [item for item in raw_items if isinstance(item, dict)]
     if len(items) != len(raw_items):
         raise PublishError("The enrichment output contains an invalid item")
+    for item in items:
+        hostname = (urlparse(str(item.get("original_url", ""))).hostname or "").lower()
+        if any(hostname == host or hostname.endswith("." + host) for host in BLOCKED_CONTENT_HOSTS):
+            raise PublishError("The enrichment output includes a blocked content domain")
+        if BLOCKED_CONTENT_TERMS.search(json.dumps(item, ensure_ascii=False)):
+            raise PublishError("The enrichment output includes blocked content")
     generated_at = latest.get("generated_at")
     if not isinstance(generated_at, str):
         raise PublishError("The enrichment output is missing generated_at")

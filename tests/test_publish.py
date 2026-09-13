@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from ai_daily_pipeline.publish import publish_latest_report
+from ai_daily_pipeline.publish import PublishError, publish_latest_report
 
 
 class PublishTests(unittest.TestCase):
@@ -24,3 +24,15 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(report["estimated_reading_minutes"], 5)
             history = json.loads((site / "data" / "reports.json").read_text(encoding="utf-8"))
             self.assertEqual(history["reports"][0]["report_date"], "2026-09-14")
+
+    def test_publish_rejects_blocked_content_even_when_url_is_allowed(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            pipeline = root / "pipeline"
+            (pipeline / "data").mkdir(parents=True)
+            (pipeline / "data" / "latest-enrichment.json").write_text(json.dumps({
+                "generated_at": "2026-09-13T17:19:08+00:00",
+                "items": [{"title_cn": "blocked OpenAI reference", "summary_cn": "", "summary_en": "", "original_url": "https://example.com"}],
+            }), encoding="utf-8")
+            with self.assertRaises(PublishError):
+                publish_latest_report(pipeline, root / "site")

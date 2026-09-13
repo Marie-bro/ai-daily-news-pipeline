@@ -1,11 +1,11 @@
 [
   {
-    "id": "openai-news",
-    "name": "OpenAI News",
+    "id": "deepseek-news",
+    "name": "DeepSeek Research & News",
     "source_type": "official_newsroom",
     "adapter": "html_index",
-    "url": "https://openai.com/news/",
-    "allow_hosts": ["openai.com"],
+    "url": "https://www.deepseek.com/en/news/",
+    "allow_hosts": ["www.deepseek.com", "deepseek.com"],
     "priority": 1
   },
   {
@@ -18,39 +18,12 @@
     "priority": 2
   },
   {
-    "id": "google-ai-blog",
-    "name": "Google Blog",
+    "id": "google-ai-news",
+    "name": "Google AI",
     "source_type": "official_blog",
-    "adapter": "rss",
-    "url": "https://blog.google/feed/",
+    "adapter": "html_index",
+    "url": "https://blog.google/innovation-and-ai/technology/ai/",
     "allow_hosts": ["blog.google"],
     "priority": 3
-  },
-  {
-    "id": "openai-python-releases",
-    "name": "OpenAI Python Releases",
-    "source_type": "github_release",
-    "adapter": "atom",
-    "url": "https://github.com/openai/openai-python/releases.atom",
-    "allow_hosts": ["github.com"],
-    "priority": 4
-  },
-  {
-    "id": "openai-codex-releases",
-    "name": "OpenAI Codex Releases",
-    "source_type": "github_release",
-    "adapter": "atom",
-    "url": "https://github.com/openai/codex/releases.atom",
-    "allow_hosts": ["github.com"],
-    "priority": 5
-  },
-  {
-    "id": "anthropic-python-releases",
-    "name": "Anthropic Python Releases",
-    "source_type": "github_release",
-    "adapter": "atom",
-    "url": "https://github.com/anthropics/anthropic-sdk-python/releases.atom",
-    "allow_hosts": ["github.com"],
-    "priority": 6
   }
 ]

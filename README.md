@@ -4,7 +4,7 @@
 
 ## 已完成能力
 
-- Phase 3：采集官方 RSS、Atom、Newsroom 和 GitHub Release，完成正文清洗、时间过滤和 URL/指纹/历史去重。
+- Phase 3：采集允许公开域名的官方 RSS、Atom、Newsroom，完成正文清洗、时间过滤和 URL/指纹/历史去重。
 - Phase 4：将少量已验证候选一次批量交给 DeepSeek，得到经严格校验的双语结构化内容，并记录 API 实际 token/cache 用量。
 - Phase 5：将最新已验证日报发布成现有飞书 H5 项目可读取的静态 JSON；按日期保存详情并更新历史索引。
 

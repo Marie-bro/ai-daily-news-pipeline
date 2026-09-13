@@ -14,7 +14,9 @@ from .models import SourceItem
 from .text import parse_datetime
 
 USER_AGENT = "AI-Daily-Collector/0.1 (+personal research; contact: local operator)"
-AI_TERMS = re.compile(r"\b(ai|openai|chatgpt|codex|deepseek|anthropic|claude|gemini|agent|mcp|model|llm|api|machine learning|generative)\b", re.I)
+AI_TERMS = re.compile(r"\b(ai|deepseek|anthropic|claude|gemini|agent|mcp|model|llm|api|machine learning|generative)\b", re.I)
+BLOCKED_CONTENT_HOSTS = ("github.com", "openai.com")
+BLOCKED_CONTENT_TERMS = re.compile(r"\b(openai|chatgpt|codex|github)\b", re.I)
 
 
 @dataclass(frozen=True)
@@ -30,7 +32,7 @@ class SourceDefinition:
 
 def load_sources(path: Path) -> list[SourceDefinition]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    return [
+    sources = [
         SourceDefinition(
             source_id=item["id"], name=item["name"], source_type=item["source_type"],
             adapter=item["adapter"], url=item["url"],
@@ -38,6 +40,10 @@ def load_sources(path: Path) -> list[SourceDefinition]:
         )
         for item in data
     ]
+    for source in sources:
+        if _blocked_host(urlparse(source.url).hostname or "") or any(_blocked_host(host) for host in source.allow_hosts):
+            raise ValueError(f"Blocked content host in source configuration: {source.source_id}")
+    return sources
 
 
 def fetch(url: str, timeout: int = 12) -> str:
@@ -48,9 +54,14 @@ def fetch(url: str, timeout: int = 12) -> str:
     return raw.decode(charset, errors="replace")
 
 
+def _blocked_host(hostname: str) -> bool:
+    hostname = hostname.lower().strip(".")
+    return any(hostname == host or hostname.endswith("." + host) for host in BLOCKED_CONTENT_HOSTS)
+
+
 def _allowed(url: str, source: SourceDefinition) -> bool:
     hostname = (urlparse(url).hostname or "").lower()
-    return any(hostname == host or hostname.endswith("." + host) for host in source.allow_hosts)
+    return not _blocked_host(hostname) and any(hostname == host or hostname.endswith("." + host) for host in source.allow_hosts)
 
 
 class _AnchorParser(HTMLParser):
@@ -106,7 +117,7 @@ def collect_source_items(source: SourceDefinition) -> list[SourceItem]:
     for href, title in parser.anchors:
         url = urljoin(source.url, href)
         title = " ".join(title.split())
-        if not title or len(title) < 12 or not AI_TERMS.search(title) or not _allowed(url, source):
+        if not title or len(title) < 12 or BLOCKED_CONTENT_TERMS.search(title) or not AI_TERMS.search(title) or not _allowed(url, source):
             continue
         if url.rstrip("/") == source.url.rstrip("/"):
             continue
