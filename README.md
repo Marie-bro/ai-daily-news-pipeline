@@ -8,7 +8,8 @@
 - Phase 4：DeepSeek 单批结构化整理和原始 usage 记录。
 - Phase 5：按日期发布静态日报，供飞书 H5 展示和历史回看。
 - Phase 5.5：从 AI 扩展到科技资讯，采用精简中文结构，并保持旧日报兼容。
-- Phase 6：仅在正式日报 URL 与静态数据均可访问时，向飞书发送交互卡片通知。
+- Phase 6：仅在正式日报 URL 与静态数据均可访问时，向飞书发送交互卡片通知；卡片展示 3 条核心双语资讯和完整日报入口。
+- Phase 6.5：飞书内收藏与本地 Obsidian 收藏 Worker。普通访客保存在浏览器本地；Owner 经飞书身份校验后进入受保护队列，由 Windows Worker 主动拉取并写入 Obsidian。
 
 ## 使用
 
@@ -61,7 +62,24 @@ powershell -ExecutionPolicy Bypass -File .\deploy\install-phase6-task.ps1
 
 模型、密钥和限额只从环境变量或已有 Phase 1 本地 `.env` 读取。模型名不在多个文件中硬编码。实际 input/output/total/cache hit/cache miss 及完整原始 usage JSON 写入 SQLite。
 
+## Phase 6.5 收藏到 Obsidian
+
+Worker 仅主动请求 `https://news.mariespace.cn/api/favorites` 的 `claim` 与 `complete` 接口，不会在 Windows 上监听端口。私有配置保存在已忽略版本控制的 `deploy/phase6.5-worker.env`；可从 `deploy/phase6.5-worker.env.example` 创建配置后验证：
+
+```powershell
+py -3 run_obsidian_worker.py --check-config
+py -3 run_obsidian_worker.py --once
+```
+
+完成队列后端配置及一次手动 `--once` 验收后，安装登录时启动的 Worker：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy\install-phase6.5-worker-task.ps1
+```
+
+任务每次拉取后等待 45 秒再继续；Windows 关机期间队列保留在 EdgeOne Blob，重新登录后任务恢复。使用 `-Remove` 可移除该任务。Worker 只会在 Obsidian Vault 的 `07资源/待读清单` 中按安全的文章 ID 写入 Markdown，重复任务不会覆盖用户笔记。
+
 ## 阶段边界
 
-本项目尚未实现 Phase 6 机器人推送、IELTS、Token Dashboard、多 Agent、MCP 或模型供应商切换。
+本项目尚未实现 Phase 7 IELTS、Token Dashboard、多 Agent、MCP 或模型供应商切换。
 
