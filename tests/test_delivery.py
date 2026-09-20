@@ -55,10 +55,21 @@ class DeliveryTests(unittest.TestCase):
     def test_card_uses_existing_bilingual_titles_and_formal_url(self):
         report = {"report_date": DATE, "article_count": 1, "estimated_reading_minutes": 5, "items": [ITEM]}
         card = card_for_report(report, daily_url(DATE))
-        self.assertEqual(card["header"]["title"]["content"], "MarieSpace Tech Daily\nMarieSpace 科技日报")
+        self.assertEqual(card["header"]["title"]["content"], "MarieSpace Tech Daily\nMarieSpace \u79d1\u6280\u65e5\u62a5")
         content = json.dumps(card, ensure_ascii=False)
         self.assertLess(content.index(ITEM["title_en"]), content.index(ITEM["title_cn"]))
+        self.assertLess(content.index(ITEM["what_happened_en"]), content.index(ITEM["what_happened"]))
+        self.assertLess(content.index(ITEM["why_it_matters_en"]), content.index(ITEM["why_it_matters"]))
+        self.assertIn("What happened?", content)
+        self.assertIn("\u53d1\u751f\u4e86\u4ec0\u4e48\uff1f", content)
+        self.assertIn("Why it matters?", content)
+        self.assertIn("\u4e3a\u4ec0\u4e48\u503c\u5f97\u5173\u6ce8\uff1f", content)
+        self.assertIn("View Full Tech Daily", content)
+        self.assertIn("\u67e5\u770b\u5b8c\u6574\u79d1\u6280\u65e5\u62a5", content)
+        self.assertIn("Save for Later", content)
+        self.assertIn("\u6536\u85cf", content)
         self.assertIn(daily_url(DATE), content)
+        self.assertIn("&favorite=", content)
         self.assertNotIn("what_happened_en", content)
         self.assertNotIn("original_url", content)
 

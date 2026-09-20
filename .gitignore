@@ -4,3 +4,4 @@ __pycache__/
 data/*.sqlite3
 data/*.json
 data/
+/deploy/phase6.5-worker.env

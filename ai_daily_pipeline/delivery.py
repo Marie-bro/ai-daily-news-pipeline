@@ -92,32 +92,50 @@ def report_id(report: dict[str, object]) -> str:
     return hashlib.sha256(json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:32]
 
 
+def _favorite_url(report_date: str, item: dict[str, object]) -> str:
+    from urllib.parse import urlsplit, urlunsplit
+
+    original = str(item["original_url"])
+    parts = urlsplit(original)
+    normalized = urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+    article_id = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return f"{daily_url(report_date)}&favorite={article_id}"
+
+
 def card_for_report(report: dict[str, object], url: str) -> dict[str, object]:
     items = report["items"]
     assert isinstance(items, list)
-    highlights = []
-    for item in items[:3]:
-        assert isinstance(item, dict)
-        highlights.extend([{"tag": "plain_text", "content": item["title_en"]}, {"tag": "plain_text", "content": item["title_cn"]}])
     date = str(report["report_date"])
     stories = int(report["article_count"])
     minutes = int(report["estimated_reading_minutes"])
     elements: list[dict[str, object]] = [
-        {"tag": "markdown", "content": f"**{date}**\n{stories} stories · {minutes} min read\n{stories} 条资讯 · 预计阅读 {minutes} 分钟"},
-        {"tag": "markdown", "content": "**Today's highlights**\n**今日科技重点**"},
+        {"tag": "markdown", "content": f"**{date}**\n{stories} stories \u00b7 {minutes} min read\n{stories} \u6761\u8d44\u8baf \u00b7 \u9884\u8ba1\u9605\u8bfb {minutes} \u5206\u949f"},
+        {"tag": "markdown", "content": "**Today's highlights**\n**\u4eca\u65e5\u79d1\u6280\u91cd\u70b9**"},
     ]
-    for title in highlights:
-        elements.append({"tag": "div", "text": title})
+    for item in items[:3]:
+        assert isinstance(item, dict)
+        elements.extend([
+            {"tag": "div", "text": {"tag": "plain_text", "content": str(item["title_en"])}},
+            {"tag": "div", "text": {"tag": "plain_text", "content": str(item["title_cn"])}},
+            {"tag": "markdown", "content": f"**What happened?**\n{item['what_happened_en']}"},
+            {"tag": "div", "text": {"tag": "plain_text", "content": f"\u53d1\u751f\u4e86\u4ec0\u4e48\uff1f\n{item['what_happened']}"}},
+            {"tag": "markdown", "content": f"**Why it matters?**\n{item['why_it_matters_en']}"},
+            {"tag": "div", "text": {"tag": "plain_text", "content": f"\u4e3a\u4ec0\u4e48\u503c\u5f97\u5173\u6ce8\uff1f\n{item['why_it_matters']}"}},
+            {"tag": "action", "actions": [{
+                "tag": "button", "type": "default", "url": _favorite_url(date, item),
+                "text": {"tag": "plain_text", "content": "Save for Later\n\u6536\u85cf"},
+            }]},
+        ])
     elements.append({
         "tag": "action",
         "actions": [{
             "tag": "button", "type": "primary", "url": url,
-            "text": {"tag": "plain_text", "content": "Read Today's Tech Daily\n阅读今日科技日报"},
+            "text": {"tag": "plain_text", "content": "View Full Tech Daily\n\u67e5\u770b\u5b8c\u6574\u79d1\u6280\u65e5\u62a5"},
         }],
     })
     return {
         "config": {"wide_screen_mode": True},
-        "header": {"template": "blue", "title": {"tag": "plain_text", "content": "MarieSpace Tech Daily\nMarieSpace 科技日报"}},
+        "header": {"template": "blue", "title": {"tag": "plain_text", "content": "MarieSpace Tech Daily\nMarieSpace \u79d1\u6280\u65e5\u62a5"}},
         "elements": elements,
     }
 
