@@ -56,6 +56,24 @@ CREATE TABLE IF NOT EXISTS model_usage (
   raw_usage_json TEXT
 );
 CREATE INDEX IF NOT EXISTS model_usage_created_at_idx ON model_usage(created_at);
+CREATE TABLE IF NOT EXISTS daily_delivery_sends (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  report_date TEXT NOT NULL,
+  report_id TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  sent_at TEXT,
+  message_id TEXT,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  error_summary TEXT,
+  force_resend INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS daily_delivery_sends_lookup_idx
+  ON daily_delivery_sends(report_date, report_id, target_type, target_id, force_resend, created_at DESC);
 CREATE TABLE IF NOT EXISTS source_fetch_cache (
   source_id TEXT PRIMARY KEY,
   url TEXT NOT NULL,
@@ -187,6 +205,40 @@ class ArticleStore:
         cursor = self.connection.execute("SELECT * FROM model_usage ORDER BY id")
         columns = [column[0] for column in cursor.description]
         return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+    def delivery_already_recorded(self, *, report_date: str, report_id: str, target_type: str, target_id: str) -> bool:
+        row = self.connection.execute(
+            """SELECT 1 FROM daily_delivery_sends
+               WHERE report_date = ? AND report_id = ? AND target_type = ? AND target_id = ?
+                 AND force_resend = 0
+               LIMIT 1""",
+            (report_date, report_id, target_type, target_id),
+        ).fetchone()
+        return row is not None
+
+    def create_delivery_attempt(self, *, report_date: str, report_id: str, target_type: str, target_id: str,
+                                request_id: str, created_at: str, force_resend: bool) -> int:
+        cursor = self.connection.execute(
+            """INSERT INTO daily_delivery_sends
+               (report_date, report_id, target_type, target_id, request_id, status, force_resend, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+            (report_date, report_id, target_type, target_id, request_id, int(force_resend), created_at, created_at),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def finish_delivery_attempt(self, attempt_id: int, *, status: str, updated_at: str, message_id: str | None = None,
+                                retry_count: int = 0, error_summary: str | None = None) -> None:
+        if status not in {"sent", "failed", "uncertain"}:
+            raise ValueError("invalid delivery status")
+        self.connection.execute(
+            """UPDATE daily_delivery_sends
+               SET status = ?, sent_at = CASE WHEN ? = 'sent' THEN ? ELSE sent_at END,
+                   message_id = ?, retry_count = ?, error_summary = ?, updated_at = ?
+               WHERE id = ?""",
+            (status, status, updated_at, message_id, retry_count, error_summary, updated_at, attempt_id),
+        )
+        self.connection.commit()
 
     def close(self) -> None:
         self.connection.close()

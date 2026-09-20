@@ -40,6 +40,21 @@ class StoreTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_delivery_state_blocks_normal_resends_but_records_force_resends(self):
+        with TemporaryDirectory() as directory:
+            store = ArticleStore(Path(directory) / "delivery.sqlite3")
+            try:
+                args = {"report_date": "2026-09-20", "report_id": "report", "target_type": "open_id", "target_id": "ou_test"}
+                self.assertFalse(store.delivery_already_recorded(**args))
+                pending = store.create_delivery_attempt(**args, request_id="first", created_at="2026-09-20T08:00:00+08:00", force_resend=False)
+                store.finish_delivery_attempt(pending, status="sent", updated_at="2026-09-20T08:00:01+08:00", message_id="om_test")
+                self.assertTrue(store.delivery_already_recorded(**args))
+                forced = store.create_delivery_attempt(**args, request_id="forced", created_at="2026-09-20T08:05:00+08:00", force_resend=True)
+                store.finish_delivery_attempt(forced, status="sent", updated_at="2026-09-20T08:05:01+08:00", message_id="om_forced")
+                self.assertTrue(store.delivery_already_recorded(**args))
+            finally:
+                store.close()
+
     def test_store_purges_articles_from_blocked_hosts(self):
         from pathlib import Path
         from tempfile import TemporaryDirectory
