@@ -5,3 +5,4 @@ data/*.sqlite3
 data/*.json
 data/
 /deploy/phase6.5-worker.env
+/deploy/edgeone-phase6.5.env
