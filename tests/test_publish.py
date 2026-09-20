@@ -19,6 +19,28 @@ def valid_item(url: str = "https://example.com/report") -> dict[str, object]:
 
 
 class PublishTests(unittest.TestCase):
+    def test_publish_requires_bilingual_pairs_for_schema_three(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            pipeline, site = root / "pipeline", root / "site"
+            (pipeline / "data").mkdir(parents=True)
+            item = {
+                "title_en": "Chip launch", "title_cn": "芯片发布", "title_original": "Chip launch", "source": "Official",
+                "published_at": "2026-09-13T16:00:00+00:00", "original_url": "https://example.com/chip",
+                "original_language": "en", "category": "chips", "what_happened_en": "The company released a new chip.",
+                "what_happened": "该公司发布了一款新芯片。", "why_it_matters_en": "It improves compute efficiency.",
+                "why_it_matters": "它提高了计算效率。", "importance_score": 82,
+            }
+            latest = pipeline / "data" / "latest-enrichment.json"
+            latest.write_text(json.dumps({"schema_version": 3, "generated_at": "2026-09-13T17:19:08+00:00", "items": [item]}, ensure_ascii=False), encoding="utf-8")
+            output = publish_latest_report(pipeline, site)
+            report = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(report["schema_version"], 3)
+            self.assertEqual(report["items"][0]["why_it_matters_en"], "It improves compute efficiency.")
+            latest.write_text(json.dumps({"schema_version": 3, "generated_at": "2026-09-13T17:19:08+00:00", "items": [{key: value for key, value in item.items() if key != "title_en"}]}, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaises(PublishError):
+                publish_latest_report(pipeline, site)
+
     def test_publish_accepts_compact_tech_daily_schema(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

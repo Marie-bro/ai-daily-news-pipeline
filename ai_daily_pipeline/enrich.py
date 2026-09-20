@@ -10,20 +10,21 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .deepseek import DeepSeekClient, DeepSeekError
+from .bilingual import validate_literal_consistency
 from .models import Article, Enrichment
 from .sources import BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS
 from .store import ArticleStore
 
-TASK_NAME = "phase5_5_tech_daily"
+TASK_NAME = "phase5_5_bilingual_tech_daily"
 TECH_CATEGORIES = {"ai", "chips", "consumer_tech", "software", "robotics", "mobility", "space", "science", "internet", "other_tech"}
 
 # This prompt is deliberately fixed and always placed first so repeated runs can use DeepSeek context caching.
-NEWS_SYSTEM_PROMPT = """You prepare a concise Chinese Tech Daily from verified source candidates.
+NEWS_SYSTEM_PROMPT = """You prepare a concise bilingual Tech Daily from verified source candidates.
 Use only facts contained in each supplied candidate. Never invent an event, date, source, URL, quote, product capability, metric, or certainty. Do not use outside knowledge.
 The supplied id, source, published_at, original_url, and title_original are source metadata. Copy them exactly.
-For every candidate, return one item. category must be exactly one of: ai, chips, consumer_tech, software, robotics, mobility, space, science, internet, other_tech. title_cn is a factual Chinese headline. what_happened is a concise Chinese description of the verified event. why_it_matters is a concise Chinese explanation of its broader technology impact. importance_score is an integer from 0 to 100. Do not generate translations, English summaries, study expressions, relevance fields, or key-point arrays.
+For every candidate, return one item. category must be exactly one of: ai, chips, consumer_tech, software, robotics, mobility, space, science, internet, other_tech. Produce paired fields in this fixed order: title_en and title_cn; what_happened_en and what_happened; why_it_matters_en and why_it_matters. English must be natural and appear first; Chinese must be natural and appear second. Each English/Chinese pair must state exactly the same facts. Keep numbers, dates, versions, product names, technical names, and certainty identical between the pair. title_cn, what_happened, and why_it_matters are the Chinese fields. importance_score is an integer from 0 to 100. Do not generate original-body excerpts, key-point arrays, full translations, study expressions, relevance fields, or additional summaries.
 Prefer high-value first-party facts. Tier 4 candidates are discovery clues only and must receive importance_score 0 unless the supplied text itself identifies a traceable primary source. Keep each text field short.
-Return only valid JSON, with no Markdown, using exactly this outer shape: {"items":[{"id":"","category":"","title_cn":"","title_original":"","source":"","published_at":"","original_url":"","what_happened":"","why_it_matters":"","importance_score":0}]}.
+Return only valid JSON, with no Markdown, using exactly this outer shape: {"items":[{"id":"","category":"","title_en":"","title_cn":"","title_original":"","source":"","published_at":"","original_url":"","what_happened_en":"","what_happened":"","why_it_matters_en":"","why_it_matters":"","importance_score":0}]}.
 """
 
 
@@ -119,12 +120,21 @@ def _validated_enrichments(payload: dict[str, object], articles: list[Article], 
         enrichment = Enrichment(
             article_id=article.id, task=TASK_NAME, generated_at=generated_at, model=model,
             title_cn=_string(item.get("title_cn"), "title_cn", article.id),
+            title_en=_string(item.get("title_en"), "title_en", article.id),
             title_original=article.original_title, source=article.source, published_at=article.published_at,
             original_url=article.original_url, category=category, original_language=article.language,
             what_happened=_string(item.get("what_happened"), "what_happened", article.id),
+            what_happened_en=_string(item.get("what_happened_en"), "what_happened_en", article.id),
             why_it_matters=_string(item.get("why_it_matters"), "why_it_matters", article.id),
+            why_it_matters_en=_string(item.get("why_it_matters_en"), "why_it_matters_en", article.id),
             importance_score=score,
         )
+        try:
+            validate_literal_consistency(enrichment.title_en, enrichment.title_cn, "title")
+            validate_literal_consistency(enrichment.what_happened_en, enrichment.what_happened, "what_happened")
+            validate_literal_consistency(enrichment.why_it_matters_en, enrichment.why_it_matters, "why_it_matters")
+        except ValueError as exc:
+            raise EnrichmentError(f"Item {article.id} has inconsistent bilingual literals: {exc}") from exc
         if BLOCKED_CONTENT_TERMS.search(json.dumps(enrichment.to_dict(), ensure_ascii=False)):
             raise EnrichmentError(f"Item {article.id} contains blocked content")
         enrichments.append(enrichment)
@@ -211,7 +221,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
         if not publishable:
             return EnrichmentResult(len(articles), 0, model, usage, None)
         output_path.write_text(json.dumps({
-            "schema_version": 2, "generated_at": now.isoformat(), "task": TASK_NAME, "model": model, "usage": usage,
+            "schema_version": 3, "generated_at": now.isoformat(), "task": TASK_NAME, "model": model, "usage": usage,
             "items": [enrichment.to_dict() for enrichment in publishable],
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         return EnrichmentResult(len(articles), len(publishable), model, usage, output_path)

@@ -21,10 +21,11 @@ def article() -> Article:
 
 def model_item(article_id: str = "article-1") -> dict[str, object]:
     return {
-        "id": article_id, "category": "ai", "title_cn": "????",
+        "id": article_id, "category": "ai", "title_en": "An AI release", "title_cn": "一项 AI 发布",
         "title_original": "ignored", "source": "ignored", "published_at": "ignored",
-        "original_url": "https://invalid.example", "what_happened": "?????????????????",
-        "why_it_matters": "?????????????????", "importance_score": 80,
+        "original_url": "https://invalid.example", "what_happened_en": "The company released a new AI capability.",
+        "what_happened": "该公司发布了一项新的 AI 能力。", "why_it_matters_en": "It affects how developers use the technology.",
+        "why_it_matters": "它会影响开发者使用这项技术的方式。", "importance_score": 80,
     }
 
 
@@ -33,9 +34,10 @@ class EnrichmentTests(unittest.TestCase):
         base = dict(article_id="a", task=TASK_NAME, generated_at="2026-09-14T00:00:00+00:00", model="m",
                     title_original="Original", source="Official", published_at="2026-09-14T00:00:00+00:00",
                     original_url="https://example.com/a", category="chips", original_language="en",
-                    what_happened="发生了事件", why_it_matters="值得关注", importance_score=90)
-        first = Enrichment(title_cn="公司发布新一代芯片平台", **base)
-        second = Enrichment(title_cn="公司发布新一代芯片平台！", **{**base, "article_id": "b", "source": "Media", "original_url": "https://example.com/b", "importance_score": 80})
+                    what_happened="发生了事件", what_happened_en="An event happened.",
+                    why_it_matters="值得关注", why_it_matters_en="It matters.", importance_score=90)
+        first = Enrichment(title_en="Company launches a new chip platform", title_cn="公司发布新一代芯片平台", **base)
+        second = Enrichment(title_en="Company launches a new chip platform", title_cn="公司发布新一代芯片平台！", **{**base, "article_id": "b", "source": "Media", "original_url": "https://example.com/b", "importance_score": 80})
         self.assertEqual(_dedupe_events([second, first]), [first])
 
     def test_validation_rejects_unknown_candidate_id(self):
@@ -59,6 +61,9 @@ class EnrichmentTests(unittest.TestCase):
             saved = json.loads((root / "data" / "latest-enrichment.json").read_text(encoding="utf-8"))
             self.assertEqual(saved["items"][0]["original_url"], "https://example.com/release")
             self.assertEqual(saved["items"][0]["original_language"], "en")
+            self.assertEqual(saved["schema_version"], 3)
+            self.assertEqual(saved["items"][0]["title_en"], "An AI release")
+            self.assertEqual(saved["items"][0]["what_happened_en"], "The company released a new AI capability.")
             self.assertEqual(saved["usage"]["total_tokens"], 200)
             store = ArticleStore(root / "data" / "ai_daily.sqlite3")
             try:
@@ -156,8 +161,16 @@ class EnrichmentTests(unittest.TestCase):
             _validated_enrichments({"items": [invalid]}, [article()], "model", article().created_at)
         valid = _validated_enrichments({"items": [model_item()]}, [article()], "model", article().created_at)[0]
         self.assertEqual(valid.category, "ai")
+        self.assertEqual(valid.title_en, "An AI release")
         self.assertNotIn("translation", valid.to_dict())
         self.assertNotIn("summary_en", valid.to_dict())
+
+    def test_bilingual_versions_and_acronyms_must_match(self):
+        inconsistent = model_item()
+        inconsistent["what_happened_en"] = "The v4.1 AI model was released."
+        inconsistent["what_happened"] = "该模型已经发布。"
+        with self.assertRaisesRegex(EnrichmentError, "inconsistent bilingual literals"):
+            _validated_enrichments({"items": [inconsistent]}, [article()], "model", article().created_at)
 
     def test_generated_blocked_content_is_rejected_before_storage(self):
         item = model_item()

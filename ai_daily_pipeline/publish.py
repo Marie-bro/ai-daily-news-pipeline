@@ -39,7 +39,9 @@ def _validated_items(raw_items: object, schema_version: int = 1) -> list[dict[st
         if not isinstance(raw_item, dict):
             raise PublishError("The enrichment output contains an invalid item")
         common = ("title_cn", "title_original", "source", "published_at", "original_url")
-        required = common + (("category", "what_happened", "why_it_matters") if schema_version >= 2 else ("summary_cn", "summary_en"))
+        tech_fields = ("category", "what_happened", "why_it_matters")
+        bilingual_fields = ("title_en", "what_happened_en", "why_it_matters_en")
+        required = common + (tech_fields + bilingual_fields if schema_version >= 3 else tech_fields if schema_version >= 2 else ("summary_cn", "summary_en"))
         for field in required:
             if not isinstance(raw_item.get(field), str) or not raw_item[field].strip():
                 raise PublishError(f"An enrichment item is missing {field}")
@@ -79,7 +81,7 @@ def publish_latest_report(pipeline_root: Path, site_root: Path) -> Path:
     if latest.get("replay") is True:
         raise PublishError("An isolated historical replay cannot be published as a daily report")
     schema_version = latest.get("schema_version", 1)
-    if type(schema_version) is not int or schema_version not in {1, 2}:
+    if type(schema_version) is not int or schema_version not in {1, 2, 3}:
         raise PublishError("The enrichment output has an unsupported schema version")
     items = _validated_items(latest.get("items"), schema_version)
     generated_at = latest.get("generated_at")

@@ -87,6 +87,10 @@ class ArticleStore:
             self.connection.execute("ALTER TABLE articles ADD COLUMN source_region TEXT NOT NULL DEFAULT 'unknown'")
         if "source_tier" not in article_columns:
             self.connection.execute("ALTER TABLE articles ADD COLUMN source_tier INTEGER NOT NULL DEFAULT 3")
+        tech_columns = {row[1] for row in self.connection.execute("PRAGMA table_info(tech_enrichments)")}
+        for column in ("title_en", "what_happened_en", "why_it_matters_en"):
+            if column not in tech_columns:
+                self.connection.execute(f"ALTER TABLE tech_enrichments ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
         self.connection.commit()
 
     def is_known(self, url: str, body_fingerprint: str) -> bool:
@@ -138,10 +142,10 @@ class ArticleStore:
         verb = "INSERT OR REPLACE" if replace else "INSERT"
         self.connection.execute(
             f"""{verb} INTO tech_enrichments
-            (article_id,task,generated_at,model,title_cn,title_original,source,published_at,original_url,
-             category,original_language,what_happened,why_it_matters,importance_score)
-            VALUES (:article_id,:task,:generated_at,:model,:title_cn,:title_original,:source,:published_at,:original_url,
-                    :category,:original_language,:what_happened,:why_it_matters,:importance_score)""",
+            (article_id,task,generated_at,model,title_cn,title_en,title_original,source,published_at,original_url,
+             category,original_language,what_happened,what_happened_en,why_it_matters,why_it_matters_en,importance_score)
+            VALUES (:article_id,:task,:generated_at,:model,:title_cn,:title_en,:title_original,:source,:published_at,:original_url,
+                    :category,:original_language,:what_happened,:what_happened_en,:why_it_matters,:why_it_matters_en,:importance_score)""",
             enrichment.to_record(),
         )
 

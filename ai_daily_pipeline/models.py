@@ -52,6 +52,7 @@ class Enrichment:
     generated_at: str
     model: str
     title_cn: str
+    title_en: str
     title_original: str
     source: str
     published_at: str
@@ -59,7 +60,9 @@ class Enrichment:
     category: str
     original_language: str
     what_happened: str
+    what_happened_en: str
     why_it_matters: str
+    why_it_matters_en: str
     importance_score: int
 
     def to_record(self) -> dict[str, str]:
@@ -68,6 +71,7 @@ class Enrichment:
     def to_dict(self) -> dict[str, object]:
         return {
             "title_cn": self.title_cn,
+            "title_en": self.title_en,
             "title_original": self.title_original,
             "source": self.source,
             "published_at": self.published_at,
@@ -75,6 +79,8 @@ class Enrichment:
             "category": self.category,
             "original_language": self.original_language,
             "what_happened": self.what_happened,
+            "what_happened_en": self.what_happened_en,
             "why_it_matters": self.why_it_matters,
+            "why_it_matters_en": self.why_it_matters_en,
             "importance_score": self.importance_score,
         }
