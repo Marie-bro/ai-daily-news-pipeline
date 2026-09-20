@@ -16,7 +16,7 @@ if ($Remove) {
 if (-not (Test-Path -LiteralPath $runner)) { throw 'Phase 6 runner is missing.' }
 $action = New-ScheduledTaskAction -Execute 'py.exe' -Argument "-3 `"$runner`" --scheduled" -WorkingDirectory $root
 $trigger = New-ScheduledTaskTrigger -Daily -At 08:00
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew
 $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings -Description 'MarieSpace Tech Daily. Runs daily at 08:00 Asia/Shanghai; sends only after formal URL verification.'
 Register-ScheduledTask -TaskName $taskName -InputObject $task -Force | Out-Null
 Write-Output "Installed $taskName for 08:00 Asia/Shanghai"
