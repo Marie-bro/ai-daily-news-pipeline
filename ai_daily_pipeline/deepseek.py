@@ -8,7 +8,10 @@ from urllib.request import Request, urlopen
 
 
 class DeepSeekError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, usage: dict[str, object] | None = None, model: str | None = None) -> None:
+        super().__init__(message)
+        self.usage = usage
+        self.model = model
 
 
 def _read_existing_local_settings() -> dict[str, str]:
@@ -33,10 +36,12 @@ class DeepSeekClient:
     def __init__(self, *, opener=urlopen) -> None:
         local_settings = _read_existing_local_settings()
         self.key = os.getenv("DEEPSEEK_API_KEY", local_settings.get("DEEPSEEK_API_KEY", "")).strip()
-        self.model = os.getenv("DEEPSEEK_MODEL", local_settings.get("DEEPSEEK_MODEL", "deepseek-flash")).strip()
+        self.model = os.getenv("DEEPSEEK_MODEL", local_settings.get("DEEPSEEK_MODEL", "")).strip()
         self.opener = opener
         if not self.key:
             raise DeepSeekError("DEEPSEEK_API_KEY is missing. Set it in the environment or the existing Phase 1 .env file.")
+        if not self.model:
+            raise DeepSeekError("DEEPSEEK_MODEL is missing. Set it in the environment or the existing Phase 1 .env file.")
 
     def complete_json(self, *, system_prompt: str, user_prompt: str, max_tokens: int) -> tuple[str, dict[str, object], str]:
         payload = {
@@ -48,6 +53,7 @@ class DeepSeekClient:
             "thinking": {"type": "disabled"},
             "temperature": 0.2,
             "max_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
             "stream": False,
         }
         request = Request(
@@ -65,14 +71,21 @@ class DeepSeekClient:
             raise DeepSeekError(f"DeepSeek connection failed: {exc.reason}") from exc
         except (OSError, ValueError) as exc:
             raise DeepSeekError(f"DeepSeek response could not be read: {exc}") from exc
-        try:
-            content = body["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise DeepSeekError("DeepSeek response has no assistant content") from exc
-        if not isinstance(content, str) or not content.strip():
-            raise DeepSeekError("DeepSeek returned an empty assistant content")
+        if not isinstance(body, dict):
+            raise DeepSeekError("DeepSeek response root is not an object")
         usage = body.get("usage")
         if not isinstance(usage, dict):
-            usage = {}
+            usage = None
         model = body.get("model") if isinstance(body.get("model"), str) else self.model
-        return content.strip(), usage, model
+        try:
+            choice = body["choices"][0]
+            content = choice["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise DeepSeekError("DeepSeek response has no assistant content", usage=usage, model=model) from exc
+        if not isinstance(choice, dict):
+            raise DeepSeekError("DeepSeek response has no assistant content", usage=usage, model=model)
+        if not isinstance(content, str) or not content.strip():
+            raise DeepSeekError("DeepSeek returned an empty assistant content", usage=usage, model=model)
+        if choice.get("finish_reason") not in (None, "stop"):
+            raise DeepSeekError("DeepSeek response was not fully generated", usage=usage, model=model)
+        return content.strip(), usage or {}, model

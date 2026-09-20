@@ -1,26 +1,48 @@
-# AI Daily 数据流水线
+﻿# Tech Daily 数据流水线
 
-该项目负责 AI Daily 的真实资讯采集、清洗、双语整理和静态日报数据发布。它只使用可追溯来源，并且不会虚构新闻、链接或来源。
+该项目负责 MarieSpace Tech Daily 的真实科技资讯采集、清洗、精简整理和静态日报数据发布。所有正式资讯保留可追溯来源，不虚构新闻、链接或来源。
 
 ## 已完成能力
 
-- Phase 3：采集允许公开域名的官方 RSS、Atom、Newsroom，完成正文清洗、时间过滤和 URL/指纹/历史去重。
-- Phase 4：将少量已验证候选一次批量交给 DeepSeek，得到经严格校验的双语结构化内容，并记录 API 实际 token/cache 用量。
-- Phase 5：将最新已验证日报发布成现有飞书 H5 项目可读取的静态 JSON；按日期保存详情并更新历史索引。
+- Phase 3：配置化 Source Adapter、正文清洗、时间过滤、条件请求和 SQLite 去重。
+- Phase 4：DeepSeek 单批结构化整理和原始 usage 记录。
+- Phase 5：按日期发布静态日报，供飞书 H5 展示和历史回看。
+- Phase 5.5：从 AI 扩展到科技资讯，采用精简中文结构，并保持旧日报兼容。
 
 ## 使用
 
 ```powershell
 py -3 -m unittest discover -s tests -p 'test_*.py' -v
+py -3 run_collect.py --validate-sources
+py -3 run_collect.py --check-sources
+py -3 run_collect.py --dry-run
 py -3 run_collect.py
+py -3 run_enrichment.py --dry-run
 py -3 run_enrichment.py
 py -3 run_publish.py
 ```
 
-`run_publish.py` 不调用 DeepSeek。它读取 `data/latest-enrichment.json`，写入相邻 `ai-daily-public-site/data/daily/ai/YYYY-MM-DD.json`，并更新 `ai-daily-public-site/data/reports.json`。历史日期不会被新日报覆盖。
+`run_publish.py` 不调用 DeepSeek。它读取 `data/latest-enrichment.json`，写入相邻站点的 `data/daily/ai/YYYY-MM-DD.json` 并更新 `data/reports.json`。保留 `/daily/ai/` 路径用于历史链接兼容；新版数据使用 `schema_version: 2` 和 `category: tech`。
 
-`run_enrichment.py` 优先使用环境变量中的 `DEEPSEEK_API_KEY`，否则复用相邻 Phase 1 项目的本地 `.env`；密钥不会复制到本仓库或输出。
+## 来源配置
+
+`config/sources.json` 继续使用 JSON + Source Adapter。每项必须定义：
+
+- `id`、`name`、`region`、`category`、`tier`、`language`
+- `source_type`、`enabled`、`adapter`、`fetch_method`、`health_status`
+- HTTPS `url`、`allow_hosts`、`priority`
+
+支持 RSS、Atom 和 HTML Index。可选站点级 `cleaning`、`article_path_pattern` 和 `conditional_requests`。正式采集保存 ETag / Last-Modified，逐源健康结果写入 `data/latest-run.json`。Tier 4 仅作线索，不直接进入正式整理。
+
+当前启用来源覆盖中国大陆、港澳台地区、美国、欧洲、日本和韩国。正式内容继续排除 GitHub、OpenAI 域名和相关内容。
+
+## Tech Daily 结构
+
+每条新版资讯包含：`category`、`title_cn`、`title_original`、`source`、`published_at`、`original_url`、`original_language`、`what_happened`、`why_it_matters` 和 `importance_score`。
+
+模型、密钥和限额只从环境变量或已有 Phase 1 本地 `.env` 读取。模型名不在多个文件中硬编码。实际 input/output/total/cache hit/cache miss 及完整原始 usage JSON 写入 SQLite。
 
 ## 阶段边界
 
-此项目不发送飞书机器人通知、不安排定时任务、不实现 IELTS 推送，也不构建 Token Dashboard。飞书页面只读取已发布的静态日报数据。
+本项目尚未实现 Phase 6 机器人推送、IELTS、Token Dashboard、多 Agent、MCP 或模型供应商切换。
+

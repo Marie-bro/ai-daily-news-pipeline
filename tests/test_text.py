@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 import unittest
 
 from ai_daily_pipeline.models import Article
-from ai_daily_pipeline.pipeline import _collapse_release_bursts
+from ai_daily_pipeline.pipeline import _collapse_release_bursts, _language
 from ai_daily_pipeline.text import clean_text, fingerprint, parse_datetime
 
 
@@ -16,6 +16,10 @@ class TextTests(unittest.TestCase):
 
     def test_parse_datetime_returns_utc(self):
         self.assertEqual(parse_datetime("Sun, 14 Sep 2026 10:00:00 +0800"), datetime(2026, 9, 14, 2, tzinfo=UTC))
+
+    def test_language_ignores_a_few_navigation_characters(self):
+        self.assertEqual(_language("A detailed English AI release. " * 30 + "中文导航"), "en")
+        self.assertEqual(_language("这是中文人工智能新闻正文。" * 30 + "AI API"), "zh")
 
     def test_release_burst_keeps_only_newest_same_day_series(self):
         base = dict(category="ai", title="Release v1.2.3", original_title="Release", source="Official SDK", source_type="official_changelog", language="en", raw_text="raw" * 100, clean_text="clean" * 100, fingerprint="a", created_at="2026-09-14T00:00:00+00:00", verification_status="source_verified")

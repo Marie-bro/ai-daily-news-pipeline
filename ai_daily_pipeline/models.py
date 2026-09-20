@@ -14,6 +14,10 @@ class SourceItem:
     url: str
     published_at: datetime | None
     priority: int
+    region: str = "unknown"
+    categories: tuple[str, ...] = ("other_tech",)
+    tier: int = 3
+    language: str = "en"
 
 
 @dataclass(frozen=True)
@@ -32,6 +36,8 @@ class Article:
     fingerprint: str
     created_at: str
     verification_status: str
+    source_region: str = "unknown"
+    source_tier: int = 3
 
     def to_dict(self) -> dict[str, str]:
         return asdict(self)
@@ -39,7 +45,7 @@ class Article:
 
 @dataclass(frozen=True)
 class Enrichment:
-    """A source-grounded bilingual rendering produced for one stored article."""
+    """A compact, source-grounded Tech Daily rendering."""
 
     article_id: str
     task: str
@@ -50,18 +56,14 @@ class Enrichment:
     source: str
     published_at: str
     original_url: str
-    key_points_original: tuple[str, ...]
-    translation: tuple[str, ...]
-    summary_cn: str
-    summary_en: str
-    relevance: str
-    useful_expressions: tuple[str, ...]
+    category: str
+    original_language: str
+    what_happened: str
+    why_it_matters: str
+    importance_score: int
 
     def to_record(self) -> dict[str, str]:
-        data = asdict(self)
-        for field in ("key_points_original", "translation", "useful_expressions"):
-            data[field] = json.dumps(data[field], ensure_ascii=False)
-        return data
+        return asdict(self)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -70,10 +72,9 @@ class Enrichment:
             "source": self.source,
             "published_at": self.published_at,
             "original_url": self.original_url,
-            "key_points_original": list(self.key_points_original),
-            "translation": list(self.translation),
-            "summary_cn": self.summary_cn,
-            "summary_en": self.summary_en,
-            "relevance": self.relevance,
-            "useful_expressions": list(self.useful_expressions),
+            "category": self.category,
+            "original_language": self.original_language,
+            "what_happened": self.what_happened,
+            "why_it_matters": self.why_it_matters,
+            "importance_score": self.importance_score,
         }

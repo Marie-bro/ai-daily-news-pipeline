@@ -4,26 +4,202 @@
     "name": "DeepSeek Research & News",
     "source_type": "official_newsroom",
     "adapter": "html_index",
+    "enabled": true,
+    "conditional_requests": true,
     "url": "https://www.deepseek.com/en/news/",
-    "allow_hosts": ["www.deepseek.com", "deepseek.com"],
-    "priority": 1
+    "allow_hosts": [
+      "www.deepseek.com",
+      "deepseek.com"
+    ],
+    "article_path_pattern": "^/en/news/[^/]+/?$",
+    "priority": 1,
+    "region": "CN",
+    "category": [
+      "ai"
+    ],
+    "tier": 1,
+    "language": "en",
+    "fetch_method": "html_index",
+    "health_status": "active"
   },
   {
     "id": "anthropic-news",
     "name": "Anthropic Newsroom",
     "source_type": "official_newsroom",
     "adapter": "html_index",
+    "enabled": true,
+    "conditional_requests": true,
     "url": "https://www.anthropic.com/news",
-    "allow_hosts": ["www.anthropic.com", "anthropic.com"],
-    "priority": 2
+    "allow_hosts": [
+      "www.anthropic.com",
+      "anthropic.com"
+    ],
+    "priority": 2,
+    "region": "US",
+    "category": [
+      "ai"
+    ],
+    "tier": 1,
+    "language": "en",
+    "fetch_method": "html_index",
+    "health_status": "active"
   },
   {
     "id": "google-ai-news",
     "name": "Google AI",
     "source_type": "official_blog",
+    "adapter": "rss",
+    "enabled": true,
+    "conditional_requests": true,
+    "url": "https://blog.google/innovation-and-ai/technology/ai/rss/",
+    "allow_hosts": [
+      "blog.google"
+    ],
+    "priority": 3,
+    "region": "US",
+    "category": [
+      "ai"
+    ],
+    "tier": 1,
+    "language": "en",
+    "fetch_method": "rss",
+    "health_status": "active"
+  },
+  {
+    "id": "nvidia-blog",
+    "name": "NVIDIA Blog",
+    "source_type": "official_blog",
+    "adapter": "rss",
+    "enabled": true,
+    "conditional_requests": true,
+    "url": "https://blogs.nvidia.com/feed/",
+    "allow_hosts": [
+      "blogs.nvidia.com",
+      "nvidia.com"
+    ],
+    "priority": 4,
+    "region": "US",
+    "category": [
+      "chips",
+      "ai",
+      "robotics"
+    ],
+    "tier": 1,
+    "language": "en",
+    "fetch_method": "rss",
+    "health_status": "active"
+  },
+  {
+    "id": "cloudflare-blog",
+    "name": "Cloudflare Blog",
+    "source_type": "official_blog",
+    "adapter": "rss",
+    "enabled": true,
+    "conditional_requests": true,
+    "url": "https://blog.cloudflare.com/rss/",
+    "allow_hosts": [
+      "blog.cloudflare.com",
+      "cloudflare.com"
+    ],
+    "priority": 5,
+    "region": "US",
+    "category": [
+      "internet",
+      "software"
+    ],
+    "tier": 1,
+    "language": "en",
+    "fetch_method": "rss",
+    "health_status": "active"
+  },
+  {
+    "id": "huggingface-blog",
+    "name": "Hugging Face Blog",
+    "source_type": "official_blog",
+    "adapter": "rss",
+    "enabled": true,
+    "conditional_requests": true,
+    "url": "https://huggingface.co/blog/feed.xml",
+    "allow_hosts": [
+      "huggingface.co"
+    ],
+    "priority": 6,
+    "region": "EU",
+    "category": [
+      "ai",
+      "software"
+    ],
+    "tier": 1,
+    "language": "en",
+    "fetch_method": "rss",
+    "health_status": "active"
+  },
+  {
+    "id": "toyota-global",
+    "name": "Toyota Global Newsroom",
+    "source_type": "official_newsroom",
+    "adapter": "rss",
+    "enabled": true,
+    "conditional_requests": true,
+    "url": "https://global.toyota/export/en/allnews_rss.xml",
+    "allow_hosts": [
+      "global.toyota",
+      "toyota.jp"
+    ],
+    "priority": 7,
+    "region": "JP",
+    "category": [
+      "mobility",
+      "robotics"
+    ],
+    "tier": 1,
+    "language": "en",
+    "fetch_method": "rss",
+    "health_status": "active"
+  },
+  {
+    "id": "samsung-global",
+    "name": "Samsung Global Newsroom",
+    "source_type": "official_newsroom",
+    "adapter": "rss",
+    "enabled": true,
+    "conditional_requests": true,
+    "url": "https://news.samsung.com/global/feed",
+    "allow_hosts": [
+      "news.samsung.com",
+      "samsung.com"
+    ],
+    "priority": 8,
+    "region": "KR",
+    "category": [
+      "consumer_tech",
+      "chips"
+    ],
+    "tier": 1,
+    "language": "en",
+    "fetch_method": "rss",
+    "health_status": "active"
+  },
+  {
+    "id": "hkust-news",
+    "name": "HKUST News",
+    "source_type": "official_university",
     "adapter": "html_index",
-    "url": "https://blog.google/innovation-and-ai/technology/ai/",
-    "allow_hosts": ["blog.google"],
-    "priority": 3
+    "enabled": true,
+    "conditional_requests": true,
+    "url": "https://hkust.edu.hk/news",
+    "allow_hosts": [
+      "hkust.edu.hk"
+    ],
+    "priority": 9,
+    "region": "HK",
+    "category": [
+      "science",
+      "ai"
+    ],
+    "tier": 1,
+    "language": "en",
+    "fetch_method": "html_index",
+    "health_status": "active"
   }
 ]

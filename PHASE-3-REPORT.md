@@ -1,34 +1,28 @@
-## Phase 3 状态
+# Phase 3 增量验收报告（2026-09-14）
 
-完成，等待验收。
+## 本次完成
 
-## 已完成
+- 来源采集改为可注册的独立 Source Adapter：RSS、Atom 和 HTML 索引各有解析器，来源由现有 `config/sources.json` 选择适配器。没有引入 RSSHub 等项目的代码或依赖。
+- 来源配置新增严格校验：必填字段、唯一 ID、适配器名称、HTTPS 和允许的主机、优先级、布尔开关、路径正则与正文清洗选择器。`enabled: false` 的来源不会发起请求。
+- 增加 `--validate-sources` 离线校验和 `--check-sources` 逐源健康检查。健康检查抓取索引并验证一篇样本正文，分别报告 `ok`、`empty`、`disabled`、`degraded` 或 `error`；单源失败不阻断其他来源。
+- 对启用的来源索引优先发送 `If-None-Match` / `If-Modified-Since`。ETag、Last-Modified 和响应正文保存在原 SQLite 数据库的 `source_fetch_cache` 表；304 时复用缓存正文，以免误报为“无内容”。`--dry-run` 和健康检查不写此缓存。
+- 增加站点级 `cleaning.include` 和 `cleaning.exclude` 规则，支持简单标签、类名和 ID 选择器；规则未命中会报错，不会静默退回到可能混入导航的全文。现有来源暂未指定未经验证的站点选择器。
+- Google AI 来源改用其公开 AI RSS，避免原 HTML 索引把导航入口当成新闻。来源请求和文章请求均限制为配置允许的 HTTPS 主机，跳转也会检查。
+- `latest-run.json` 预留逐源状态字段 `source_health`；原有文章字段和 SQLite 去重机制保持不变。Phase 5/8 功能没有提前实现。
 
-- 新建独立的新闻采集与标准化项目；Phase 2 / 2.5 的网站和飞书网页应用没有修改或删除。
-- 配置官方来源：OpenAI、Anthropic、Google 的官方 Newsroom / Feed，以及 OpenAI Codex、OpenAI Python、Anthropic Python 的官方 GitHub Release Feed。
-- 实现 RSS、Atom 和官方 Newsroom 索引适配；每个来源独立失败，不会中断其它来源。
-- 实现正文抽取、广告/导航等标签剔除、正文长度限制、发布时间解析、24 小时优先与最多 72 小时回退。
-- 实现 URL 去重、正文指纹去重、SQLite 跨次运行历史去重，以及同一来源同日发布波次合并。
-- 按结构化字段保存 `id`、`category`、标题、来源、来源类型、发布时间、原始链接、语言、原文、清洗正文、指纹、创建时间和核验状态。
-- 正式写入的本次验证结果为 3 条近期官方候选；每条保留真实 GitHub Release 原文链接。
+## 验证
 
-## 测试结果
+```powershell
+py -3 run_collect.py --validate-sources
+py -3 run_collect.py --check-sources
+py -3 run_collect.py --dry-run
+py -3 -m unittest discover -s tests -p 'test_*.py' -v
+```
 
-- 单元测试：6/6 通过，覆盖文本清洗、指纹稳定性、时间解析、RSS 解析、SQLite 去重和同日发布波次合并。
-- 真实抓取：读取 42 个来源条目；24 小时不足后正确回退至 72 小时窗口，标准化得到 3 条独立候选并写入 SQLite。
-- 重复运行：再次抓取 `inserted=0`，已验证历史去重有效。
-- 两个不可用来源会记录错误且不产生虚构条目：OpenAI News 页面返回 403；Google Feed 返回非完整 XML。其它来源继续正常运行。
+当前 3 个启用来源的索引与样本正文检查均为 `ok`。端到端空跑读取 38 个来源候选，近 72 小时内接受 0 条，错误 0 条；没有为达到数量目标而收录旧文或虚构内容。空跑不写文章库，也不调用 DeepSeek。
 
-## Token / 成本影响
+正式采集路径连续运行两次，均为 38 个索引候选、0 条合格新文、0 错误；文章库仍为 0 条。第二次运行中 DeepSeek 来源实际返回 304，`source_health` 显示 `not_modified=true`、`used_conditional_request=true`，缓存正文被复用。Anthropic 和 Google 当前未提供 ETag / Last-Modified，故使用普通请求。
 
-本阶段没有调用 DeepSeek、没有发送飞书消息、没有传入网页 HTML 给模型；实际模型 Token 成本为 0。
+## 边界
 
-## 当前已知问题
-
-- 近期 72 小时内仅有 3 条去重后的独立官方更新，系统按规则保留真实数量，不凑到 8–15 条。
-- OpenAI News 的访问限制和 Google Feed 的 XML 格式问题已写入运行报告；自动重试属于 Phase 9，本阶段不会无限重试。
-- 数据当前保存在本机 SQLite，尚未接入 Phase 5 的日报页面或飞书归档；双语整理属于 Phase 4。
-
-## 仍需我操作
-
-无。请验收采集命令与 `data/ai_daily.sqlite3` 中的可追溯记录；验收后再开始 Phase 4 的 DeepSeek 批量双语整理。
+本阶段没有配置域名、DNS、HTTPS、EdgeOne 或飞书正式入口；没有发布日报、Token Dashboard 或定时重试。正式域名实名审核完成前，相关发布步骤继续暂停。

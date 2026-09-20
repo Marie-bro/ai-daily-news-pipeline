@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .extract import extract_article
 from .models import Article, SourceItem
-from .sources import AI_TERMS, BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS, SourceDefinition, collect_source_items, fetch, load_sources
+from .sources import TECH_TERMS, BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS, SourceDefinition, collect_source, fetch, load_sources
 from .store import ArticleStore
 from .text import article_id, fingerprint
 
@@ -21,6 +21,7 @@ class RunResult:
     time_window_hours: int
     errors: tuple[str, ...]
     articles: tuple[Article, ...]
+    source_health: tuple[dict[str, object], ...] = ()
 
 
 def _in_window(published_at: datetime, now: datetime, hours: int) -> bool:
@@ -28,7 +29,9 @@ def _in_window(published_at: datetime, now: datetime, hours: int) -> bool:
 
 
 def _language(text: str) -> str:
-    return "zh" if any("\u4e00" <= char <= "\u9fff" for char in text) else "en"
+    han = sum("\u4e00" <= char <= "\u9fff" for char in text)
+    latin = sum(char.isascii() and char.isalpha() for char in text)
+    return "zh" if han >= 20 and han * 5 >= latin else "en"
 
 
 def _collapse_release_bursts(articles: list[Article]) -> list[Article]:
@@ -46,39 +49,78 @@ def _collapse_release_bursts(articles: list[Article]) -> list[Article]:
     return sorted(others + list(selected.values()), key=lambda article: article.published_at, reverse=True)
 
 
-def _candidate_to_article(item: SourceItem, now: datetime) -> Article | None:
-    page = fetch(item.url)
-    extracted = extract_article(page, item.title)
+def _candidate_to_article(item: SourceItem, now: datetime, source: SourceDefinition) -> Article | None:
+    page = fetch(item.url, allow_hosts=source.allow_hosts)
+    extracted = extract_article(page, item.title, source.cleaning)
     published = extracted.published_at or item.published_at
     if not published or not extracted.clean_text or len(extracted.clean_text) < 120:
         return None
     title = extracted.title or item.title
     if BLOCKED_CONTENT_TERMS.search(title + " " + extracted.clean_text[:3_000]):
         return None
-    # Feed indexes can contain generic company posts; retain only actual AI-relevant candidates.
-    if not AI_TERMS.search(title + " " + extracted.clean_text[:3_000]):
+    # Feed indexes can contain generic company posts; retain only actual technology candidates.
+    if not TECH_TERMS.search(title + " " + extracted.clean_text[:3_000]):
         return None
     published = published.astimezone(UTC)
     body_fingerprint = fingerprint(title, extracted.clean_text)
     return Article(
-        id=article_id(item.url), category="ai", title=title, original_title=title,
+        id=article_id(item.url), category=item.categories[0], title=title, original_title=title,
         source=item.source, source_type=item.source_type, published_at=published.isoformat(),
         original_url=item.url, language=_language(extracted.clean_text), raw_text=extracted.raw_text,
         clean_text=extracted.clean_text, fingerprint=body_fingerprint,
         created_at=now.astimezone(UTC).isoformat(), verification_status="source_verified",
+        source_region=item.region, source_tier=item.tier,
     )
+
+
+def check_sources(root: Path) -> list[dict[str, object]]:
+    """Check every source index independently without writing articles or cache."""
+    results: list[dict[str, object]] = []
+    for source in load_sources(root / "config" / "sources.json"):
+        try:
+            collection = collect_source(source)
+            status = collection.status
+            if collection.items:
+                sample = collection.items[0]
+                extracted = extract_article(fetch(sample.url, allow_hosts=source.allow_hosts), sample.title, source.cleaning)
+                if len(extracted.clean_text) < 120:
+                    status = "degraded"
+            results.append({"source_id": source.source_id, "status": status, "items": len(collection.items),
+                            "region": source.region, "tier": source.tier, "configured_health": source.health_status,
+                            "checked_at": datetime.now(UTC).isoformat()})
+        except Exception as exc:
+            results.append({"source_id": source.source_id, "status": "error", "items": 0,
+                            "checked_at": datetime.now(UTC).isoformat(), "error": f"{type(exc).__name__}: {exc}"})
+    return results
 
 
 def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minimum: int = 8, maximum: int = 15) -> RunResult:
     now = (now or datetime.now(UTC)).astimezone(UTC)
     sources: list[SourceDefinition] = load_sources(root / "config" / "sources.json")
+    sources_by_id = {source.source_id: source for source in sources}
     errors: list[str] = []
     source_items: list[SourceItem] = []
-    for source in sources:
-        try:
-            source_items.extend(collect_source_items(source))
-        except Exception as exc:  # Individual sources must not make us invent replacements.
-            errors.append(f"{source.source_id}: {type(exc).__name__}: {exc}")
+    source_health: list[dict[str, object]] = []
+    cache = ArticleStore(root / "data" / "ai_daily.sqlite3") if not dry_run else None
+    try:
+        for source in sources:
+            try:
+                result = collect_source(source, cache)
+                source_items.extend(result.items)
+                source_health.append({"source_id": source.source_id, "status": result.status,
+                                      "region": source.region, "tier": source.tier, "configured_health": source.health_status,
+                                      "items": len(result.items), "not_modified": result.not_modified,
+                                      "used_conditional_request": result.used_conditional_request,
+                                      "checked_at": now.isoformat()})
+            except Exception as exc:  # An unavailable source must not invent replacements.
+                message = f"{source.source_id}: {type(exc).__name__}: {exc}"
+                errors.append(message)
+                source_health.append({"source_id": source.source_id, "status": "error", "items": 0,
+                                      "not_modified": False, "used_conditional_request": False,
+                                      "checked_at": now.isoformat(), "error": message})
+    finally:
+        if cache:
+            cache.close()
     unique_items = {item.url: item for item in source_items}
     ordered = sorted(
         unique_items.values(),
@@ -93,14 +135,14 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
             if item.published_at is not None and not _in_window(item.published_at, now, candidate_window):
                 continue
             bucket = eligible_by_source.setdefault(item.source_id, [])
-            # Two newest links per source preserve source diversity and cap network work.
-            if len(bucket) < 2:
+            # HTML indexes mix article cards with navigation; scan a bounded set of recent links.
+            if len(bucket) < 8:
                 bucket.append(item)
         eligible = [item for bucket in eligible_by_source.values() for item in bucket]
 
         def normalize(item: SourceItem) -> tuple[SourceItem, Article | None, str | None]:
             try:
-                return item, _candidate_to_article(item, now), None
+                return item, _candidate_to_article(item, now, sources_by_id[item.source_id]), None
             except Exception as exc:
                 return item, None, f"{item.url}: {type(exc).__name__}: {exc}"
 
@@ -124,11 +166,12 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
                 inserted += int(store.add(article))
         finally:
             store.close()
-    result = RunResult(len(source_items), len(articles), inserted, window_hours, tuple(errors), tuple(articles))
+    result = RunResult(len(source_items), len(articles), inserted, window_hours, tuple(errors), tuple(articles), tuple(source_health))
     output = {
         "fetched_source_items": result.fetched_source_items, "accepted": result.accepted,
         "inserted": result.inserted, "time_window_hours": result.time_window_hours,
         "errors": list(result.errors), "articles": [article.to_dict() for article in result.articles],
+        "source_health": list(result.source_health),
     }
     data_dir = root / "data"
     data_dir.mkdir(exist_ok=True)

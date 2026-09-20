@@ -2,23 +2,28 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from difflib import SequenceMatcher
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
-from .deepseek import DeepSeekClient
+from .deepseek import DeepSeekClient, DeepSeekError
 from .models import Article, Enrichment
+from .sources import BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS
 from .store import ArticleStore
 
-TASK_NAME = "phase4_bilingual_daily"
+TASK_NAME = "phase5_5_tech_daily"
+TECH_CATEGORIES = {"ai", "chips", "consumer_tech", "software", "robotics", "mobility", "space", "science", "internet", "other_tech"}
 
 # This prompt is deliberately fixed and always placed first so repeated runs can use DeepSeek context caching.
-NEWS_SYSTEM_PROMPT = """You prepare a bilingual AI Daily from verified source candidates.
+NEWS_SYSTEM_PROMPT = """You prepare a concise Chinese Tech Daily from verified source candidates.
 Use only facts contained in each supplied candidate. Never invent an event, date, source, URL, quote, product capability, metric, or certainty. Do not use outside knowledge.
 The supplied id, source, published_at, original_url, and title_original are source metadata. Copy them exactly.
-For every candidate, return one item. key_points_original must be 2 to 4 concise points faithful to the original-language source text. translation must be a Chinese translation of the matching key point in the same array position. Keep Original Key Points, Chinese Translation, AI Summary, and English Summary separate.
-For an English candidate, useful_expressions must contain exactly 2 useful English expressions from its supplied text. For a Chinese candidate, include exactly 2 accurate English study expressions only when supported by its translated summary; otherwise return an empty array.
-Return only valid JSON, with no Markdown, using exactly this outer shape: {"items":[{"id":"","title_cn":"","title_original":"","source":"","published_at":"","original_url":"","key_points_original":[],"translation":[],"summary_cn":"","summary_en":"","relevance":"","useful_expressions":[]}]}.
+For every candidate, return one item. category must be exactly one of: ai, chips, consumer_tech, software, robotics, mobility, space, science, internet, other_tech. title_cn is a factual Chinese headline. what_happened is a concise Chinese description of the verified event. why_it_matters is a concise Chinese explanation of its broader technology impact. importance_score is an integer from 0 to 100. Do not generate translations, English summaries, study expressions, relevance fields, or key-point arrays.
+Prefer high-value first-party facts. Tier 4 candidates are discovery clues only and must receive importance_score 0 unless the supplied text itself identifies a traceable primary source. Keep each text field short.
+Return only valid JSON, with no Markdown, using exactly this outer shape: {"items":[{"id":"","category":"","title_cn":"","title_original":"","source":"","published_at":"","original_url":"","what_happened":"","why_it_matters":"","importance_score":0}]}.
 """
 
 
@@ -32,7 +37,7 @@ class EnrichmentResult:
     saved: int
     model: str | None
     usage: dict[str, object]
-    output_path: Path
+    output_path: Path | None
 
 
 def _positive_int(name: str, default: int) -> int:
@@ -55,6 +60,8 @@ def _candidate_payload(articles: list[Article], per_article_characters: int) -> 
             "published_at": article.published_at,
             "original_url": article.original_url,
             "language": article.language,
+            "source_region": article.source_region,
+            "source_tier": article.source_tier,
             "clean_text": article.clean_text[:per_article_characters],
         }
         for article in articles
@@ -83,13 +90,6 @@ def _string(value: object, field: str, article_id: str) -> str:
     return value.strip()
 
 
-def _strings(value: object, field: str, article_id: str, *, minimum: int, maximum: int) -> tuple[str, ...]:
-    if not isinstance(value, list) or not minimum <= len(value) <= maximum:
-        raise EnrichmentError(f"Item {article_id} must contain {minimum} to {maximum} {field}")
-    values = tuple(_string(entry, field, article_id) for entry in value)
-    return values
-
-
 def _validated_enrichments(payload: dict[str, object], articles: list[Article], model: str, generated_at: str) -> list[Enrichment]:
     raw_items = payload.get("items")
     if not isinstance(raw_items, list) or len(raw_items) != len(articles):
@@ -109,52 +109,93 @@ def _validated_enrichments(payload: dict[str, object], articles: list[Article], 
     enrichments: list[Enrichment] = []
     for article in articles:
         item = by_id[article.id]
-        points = _strings(item.get("key_points_original"), "key_points_original", article.id, minimum=2, maximum=4)
-        translations = _strings(item.get("translation"), "translation", article.id, minimum=2, maximum=4)
-        if len(points) != len(translations):
-            raise EnrichmentError(f"Item {article.id} has unmatched key points and translations")
-        expressions_raw = item.get("useful_expressions")
-        if not isinstance(expressions_raw, list) or len(expressions_raw) > 4:
-            raise EnrichmentError(f"Item {article.id} has invalid useful_expressions")
-        expressions = tuple(_string(value, "useful_expressions", article.id) for value in expressions_raw)
-        if article.language == "en" and len(expressions) < 2:
-            raise EnrichmentError(f"English item {article.id} needs 2 to 4 useful expressions")
+        category = _string(item.get("category"), "category", article.id)
+        if category not in TECH_CATEGORIES:
+            raise EnrichmentError(f"Item {article.id} has an invalid category")
+        score = item.get("importance_score")
+        if type(score) is not int or not 0 <= score <= 100:
+            raise EnrichmentError(f"Item {article.id} has an invalid importance_score")
         # Source metadata is always taken from the stored, verified article rather than trusting model output.
-        enrichments.append(Enrichment(
+        enrichment = Enrichment(
             article_id=article.id, task=TASK_NAME, generated_at=generated_at, model=model,
             title_cn=_string(item.get("title_cn"), "title_cn", article.id),
             title_original=article.original_title, source=article.source, published_at=article.published_at,
-            original_url=article.original_url, key_points_original=points, translation=translations,
-            summary_cn=_string(item.get("summary_cn"), "summary_cn", article.id),
-            summary_en=_string(item.get("summary_en"), "summary_en", article.id),
-            relevance=_string(item.get("relevance"), "relevance", article.id), useful_expressions=expressions,
-        ))
-    return enrichments
+            original_url=article.original_url, category=category, original_language=article.language,
+            what_happened=_string(item.get("what_happened"), "what_happened", article.id),
+            why_it_matters=_string(item.get("why_it_matters"), "why_it_matters", article.id),
+            importance_score=score,
+        )
+        if BLOCKED_CONTENT_TERMS.search(json.dumps(enrichment.to_dict(), ensure_ascii=False)):
+            raise EnrichmentError(f"Item {article.id} contains blocked content")
+        enrichments.append(enrichment)
+    return sorted(enrichments, key=lambda value: value.importance_score, reverse=True)
 
 
-def run_enrichment(root: Path, *, dry_run: bool = False) -> EnrichmentResult:
-    max_articles = _positive_int("MAX_BATCH_ARTICLES", 8)
+def _eligible_content(article: Article) -> bool:
+    parsed = urlparse(article.original_url)
+    host = (parsed.hostname or "").lower()
+    return (article.verification_status == "source_verified" and article.category in TECH_CATEGORIES
+            and article.source_tier <= 3
+            and parsed.scheme == "https" and bool(host)
+            and not any(host == blocked or host.endswith("." + blocked) for blocked in BLOCKED_CONTENT_HOSTS)
+            and not BLOCKED_CONTENT_TERMS.search(article.title + " " + article.clean_text[:3_000]))
+
+
+def _dedupe_events(items: list[Enrichment]) -> list[Enrichment]:
+    """Keep one highest-value rendering when multiple sources describe the same event."""
+    selected: list[Enrichment] = []
+    for item in sorted(items, key=lambda value: value.importance_score, reverse=True):
+        normalized = re.sub(r"[^\w\u4e00-\u9fff]", "", item.title_cn.casefold())
+        if any(SequenceMatcher(None, normalized, re.sub(r"[^\w\u4e00-\u9fff]", "", other.title_cn.casefold())).ratio() >= .78
+               for other in selected):
+            continue
+        selected.append(item)
+    return selected
+
+
+def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = None) -> EnrichmentResult:
+    max_articles = _positive_int("MAX_BATCH_ARTICLES", 10)
+    if max_articles > 10:
+        raise EnrichmentError("MAX_BATCH_ARTICLES must be at most 10 for one daily digest")
     character_limit = _positive_int("MAX_NEWS_INPUT_CHARS_PER_ARTICLE", 4_000)
-    max_output_tokens = _positive_int("MAX_NEWS_OUTPUT_TOKENS", 3_500)
+    max_output_tokens = _positive_int("MAX_NEWS_OUTPUT_TOKENS", 1_800)
     max_daily_tokens = _positive_int("MAX_DAILY_TOKENS", 40_000)
-    now = datetime.now(UTC)
+    now = (now or datetime.now(UTC)).astimezone(UTC)
     data_dir = root / "data"
     output_path = data_dir / "latest-enrichment.json"
     store = ArticleStore(data_dir / "ai_daily.sqlite3")
     try:
-        articles = store.unenriched_articles(TASK_NAME, max_articles)
-        prompt = _candidate_payload(articles, character_limit)
+        candidates = store.unenriched_articles(
+            TASK_NAME, max_articles * 4,
+            published_after=(now - timedelta(hours=72)).isoformat(),
+            published_before=(now + timedelta(minutes=10)).isoformat(),
+        )
+        articles = [article for article in candidates if _eligible_content(article)][:max_articles]
         if not articles:
-            raise EnrichmentError("No unenriched verified candidates are available. Run collection first.")
+            return EnrichmentResult(0, 0, None, {}, None)
+        prompt = _candidate_payload(articles, character_limit)
         if dry_run:
-            output_path.write_text(json.dumps({"candidates": len(articles), "prompt_characters": len(prompt), "dry_run": True}, indent=2), encoding="utf-8")
-            return EnrichmentResult(len(articles), 0, None, {}, output_path)
+            preview_path = data_dir / "enrichment-preview.json"
+            preview_path.write_text(json.dumps({"candidates": len(articles), "prompt_characters": len(prompt), "dry_run": True}, indent=2), encoding="utf-8")
+            return EnrichmentResult(len(articles), 0, None, {}, preview_path)
         today_total = store.daily_total_tokens(now.date().isoformat())
         if today_total >= max_daily_tokens:
             raise EnrichmentError(f"MAX_DAILY_TOKENS reached: {today_total}/{max_daily_tokens} actual tokens already recorded today")
-        content, usage, model = DeepSeekClient().complete_json(
-            system_prompt=NEWS_SYSTEM_PROMPT, user_prompt=prompt, max_tokens=max_output_tokens,
-        )
+        conservative_estimate = len(NEWS_SYSTEM_PROMPT) + len(prompt) + max_output_tokens
+        if today_total + conservative_estimate > max_daily_tokens:
+            raise EnrichmentError(
+                f"Daily token guard: {today_total} recorded + {conservative_estimate} conservative estimate exceeds {max_daily_tokens}"
+            )
+        try:
+            content, usage, model = DeepSeekClient().complete_json(
+                system_prompt=NEWS_SYSTEM_PROMPT, user_prompt=prompt, max_tokens=max_output_tokens,
+            )
+        except DeepSeekError as exc:
+            if exc.usage is not None:
+                store.record_usage(task=f"{TASK_NAME}_rejected", model=exc.model or "unknown",
+                                   created_at=now.isoformat(), usage=exc.usage)
+                store.commit()
+            raise
         try:
             enrichments = _validated_enrichments(_extract_json(content), articles, model, now.isoformat())
         except EnrichmentError:
@@ -166,10 +207,13 @@ def run_enrichment(root: Path, *, dry_run: bool = False) -> EnrichmentResult:
             store.save_enrichment(enrichment)
         store.record_usage(task=TASK_NAME, model=model, created_at=now.isoformat(), usage=usage)
         store.commit()
+        publishable = _dedupe_events([item for item in enrichments if item.importance_score >= 60])[:10]
+        if not publishable:
+            return EnrichmentResult(len(articles), 0, model, usage, None)
         output_path.write_text(json.dumps({
-            "generated_at": now.isoformat(), "task": TASK_NAME, "model": model, "usage": usage,
-            "items": [enrichment.to_dict() for enrichment in enrichments],
+            "schema_version": 2, "generated_at": now.isoformat(), "task": TASK_NAME, "model": model, "usage": usage,
+            "items": [enrichment.to_dict() for enrichment in publishable],
         }, ensure_ascii=False, indent=2), encoding="utf-8")
-        return EnrichmentResult(len(articles), len(enrichments), model, usage, output_path)
+        return EnrichmentResult(len(articles), len(publishable), model, usage, output_path)
     finally:
         store.close()
