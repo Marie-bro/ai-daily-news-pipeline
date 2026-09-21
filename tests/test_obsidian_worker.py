@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ai_daily_pipeline.obsidian_worker import WorkerError, WorkerSettings, render_markdown, write_favorite
+from ai_daily_pipeline.obsidian_worker import WorkerError, WorkerSettings, target_directory, write_favorite
 
 
 class ObsidianWorkerTests(unittest.TestCase):
@@ -45,6 +45,22 @@ class ObsidianWorkerTests(unittest.TestCase):
         settings = WorkerSettings("https://news.mariespace.cn/api/favorites", "test-token", self.vault, "../outside")
         with self.assertRaises(WorkerError):
             write_favorite(self.job, settings)
+
+    def test_chinese_relative_directory_can_resolve_write_stat_and_read_back(self):
+        directory = target_directory(self.settings)
+        self.assertEqual(directory, self.vault / "07资源" / "待读清单")
+        self.assertFalse(directory.exists())
+        destination, created = write_favorite(self.job, self.settings)
+        self.assertTrue(created)
+        self.assertTrue(directory.is_dir())
+        self.assertTrue(destination.is_file())
+        self.assertTrue(destination.stat().st_size > 0)
+        self.assertIn("English title", destination.read_text(encoding="utf-8"))
+
+    def test_rejects_windows_illegal_relative_path_before_write(self):
+        settings = WorkerSettings("https://news.mariespace.cn/api/favorites", "test-token", self.vault, "07??/待读清单")
+        with self.assertRaisesRegex(WorkerError, "Invalid Obsidian favorites path configuration"):
+            target_directory(settings)
 
 
 if __name__ == "__main__":

@@ -64,9 +64,20 @@ def settings_from_environment(environment: dict[str, str] | None = None) -> Work
 
 
 def _safe_relative_directory(value: str) -> Path:
-    path = Path(value)
-    if path.is_absolute() or ".." in path.parts or not path.parts:
-        raise WorkerError("OBSIDIAN_FAVORITES_RELATIVE_DIR must be a safe relative path")
+    raw = value.strip() if isinstance(value, str) else ""
+    # Validate each directory name separately: slash and backslash are allowed
+    # only as separators, never as part of a filename.
+    parts = re.split(r"[\\\\/]", raw)
+    invalid = '<>:"|?*'
+    if (
+        not raw
+        or not parts
+        or any(not part or part in {".", ".."} or any(char in invalid for char in part) for part in parts)
+    ):
+        raise WorkerError("Invalid Obsidian favorites path configuration")
+    path = Path(*parts)
+    if path.is_absolute() or ".." in path.parts:
+        raise WorkerError("Invalid Obsidian favorites path configuration")
     return path
 
 
@@ -80,6 +91,15 @@ def target_directory(settings: WorkerSettings) -> Path:
     if root not in destination.parents and destination != root:
         raise WorkerError("favorite destination escapes the Obsidian vault")
     return destination
+
+
+def validate_startup_configuration(settings: WorkerSettings) -> None:
+    missing = settings.missing()
+    if missing:
+        raise WorkerError("missing required configuration: " + ", ".join(missing))
+    # Resolve paths before any network work so a bad local setting cannot leave
+    # a queue task in a processing lease.
+    target_directory(settings)
 
 
 def _quote_yaml(value: str) -> str:
@@ -195,9 +215,7 @@ def request_json(url: str, token: str, payload: dict[str, object] | None = None)
 
 
 def process_once(settings: WorkerSettings) -> str:
-    missing = settings.missing()
-    if missing:
-        raise WorkerError("missing required configuration: " + ", ".join(missing))
+    validate_startup_configuration(settings)
     claimed = request_json(f"{settings.api_base}/claim", settings.token)
     job = claimed.get("job")
     if job is None:
@@ -225,17 +243,18 @@ def main() -> int:
     load_local_environment(args.env_file)
     settings = settings_from_environment()
     if args.check_config:
-        missing = settings.missing()
-        if missing:
-            print("missing: " + ", ".join(missing))
-            return 2
         try:
-            target_directory(settings)
+            validate_startup_configuration(settings)
         except WorkerError as exc:
             print(str(exc))
             return 2
         print("configuration is valid")
         return 0
+    try:
+        validate_startup_configuration(settings)
+    except WorkerError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if args.interval < 30 or args.interval > 60:
         parser.error("--interval must be between 30 and 60 seconds")
     while True:
