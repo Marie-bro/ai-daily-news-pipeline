@@ -185,7 +185,9 @@ def request_json(url: str, token: str, payload: dict[str, object] | None = None)
     try:
         with urlopen(request, timeout=20) as response:
             value = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, OSError, json.JSONDecodeError) as exc:
+    except HTTPError as exc:
+        raise WorkerError(f"favorite backend request failed: HTTP {exc.code}") from exc
+    except (URLError, OSError, json.JSONDecodeError) as exc:
         raise WorkerError("favorite backend request failed") from exc
     if not isinstance(value, dict) or not value.get("ok"):
         raise WorkerError("favorite backend rejected worker request")
