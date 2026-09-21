@@ -99,7 +99,7 @@ def _favorite_url(report_date: str, item: dict[str, object]) -> str:
     parts = urlsplit(original)
     normalized = urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
     article_id = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-    return f"{daily_url(report_date)}&favorite={article_id}"
+    return f"{daily_url(report_date)}&favorite={article_id}&client=phase65-queue1"
 
 
 def card_for_report(report: dict[str, object], url: str) -> dict[str, object]:
