@@ -16,7 +16,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 DEFAULT_API = "https://news.mariespace.cn/api/favorites"
-DEFAULT_RELATIVE_DIR = "07资源/待读清单"
+DEFAULT_RELATIVE_DIR = "待读清单"
 REQUIRED_FIELDS = ("article_id", "title_en", "title_zh", "what_happened_en", "what_happened_zh", "why_it_matters_en", "why_it_matters_zh", "source", "published_at", "original_url", "lease_id")
 
 
@@ -97,9 +97,22 @@ def validate_startup_configuration(settings: WorkerSettings) -> None:
     missing = settings.missing()
     if missing:
         raise WorkerError("missing required configuration: " + ", ".join(missing))
-    # Resolve paths before any network work so a bad local setting cannot leave
-    # a queue task in a processing lease.
-    target_directory(settings)
+    # Resolve and probe the configured target before any network work so a bad
+    # local setting cannot leave a queue task in a processing lease.
+    directory = target_directory(settings)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8", newline="\n", dir=directory, prefix=".mariespace-write-check-", suffix=".tmp", delete=False) as handle:
+            handle.write("MarieSpace Obsidian write check\n")
+            handle.flush()
+            probe = Path(handle.name)
+        try:
+            if probe.read_text(encoding="utf-8") != "MarieSpace Obsidian write check\n":
+                raise WorkerError("configured Obsidian vault is not writable")
+        finally:
+            probe.unlink(missing_ok=True)
+    except OSError as exc:
+        raise WorkerError("configured Obsidian vault is not writable") from exc
 
 
 def _quote_yaml(value: str) -> str:
@@ -185,6 +198,9 @@ def write_favorite(job: object, settings: WorkerSettings, *, now: Callable[[], d
     directory.mkdir(parents=True, exist_ok=True)
     destination = directory / f"{validated['article_id']}.md"
     if destination.exists():
+        existing = destination.read_text(encoding="utf-8")
+        if f'article_id: "{validated["article_id"]}"' not in existing:
+            raise WorkerError("existing favorite file could not be verified")
         return destination, False
     content = render_markdown(validated, saved_at=now().astimezone().isoformat(timespec="seconds"))
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", dir=directory, prefix=".favorite-", suffix=".tmp", delete=False) as handle:
@@ -196,6 +212,8 @@ def write_favorite(job: object, settings: WorkerSettings, *, now: Callable[[], d
         temporary.replace(destination)
     finally:
         temporary.unlink(missing_ok=True)
+    if destination.read_text(encoding="utf-8") != content:
+        raise WorkerError("favorite file read-back verification failed")
     return destination, True
 
 
