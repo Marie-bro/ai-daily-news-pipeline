@@ -20,7 +20,9 @@
     "tier": 1,
     "language": "en",
     "fetch_method": "html_index",
-    "health_status": "active"
+    "health_status": "active",
+    "source_role": "primary",
+    "channel": ["technology"]
   },
   {
     "id": "anthropic-news",
@@ -42,7 +44,9 @@
     "tier": 1,
     "language": "en",
     "fetch_method": "html_index",
-    "health_status": "active"
+    "health_status": "active",
+    "source_role": "primary",
+    "channel": ["technology"]
   },
   {
     "id": "google-ai-news",
@@ -63,7 +67,9 @@
     "tier": 1,
     "language": "en",
     "fetch_method": "rss",
-    "health_status": "active"
+    "health_status": "active",
+    "source_role": "primary",
+    "channel": ["technology"]
   },
   {
     "id": "nvidia-blog",
@@ -87,7 +93,9 @@
     "tier": 1,
     "language": "en",
     "fetch_method": "rss",
-    "health_status": "active"
+    "health_status": "active",
+    "source_role": "primary",
+    "channel": ["technology"]
   },
   {
     "id": "cloudflare-blog",
@@ -110,7 +118,9 @@
     "tier": 1,
     "language": "en",
     "fetch_method": "rss",
-    "health_status": "active"
+    "health_status": "active",
+    "source_role": "primary",
+    "channel": ["technology"]
   },
   {
     "id": "huggingface-blog",
@@ -132,7 +142,9 @@
     "tier": 1,
     "language": "en",
     "fetch_method": "rss",
-    "health_status": "active"
+    "health_status": "active",
+    "source_role": "primary",
+    "channel": ["technology"]
   },
   {
     "id": "toyota-global",
@@ -155,7 +167,9 @@
     "tier": 1,
     "language": "en",
     "fetch_method": "rss",
-    "health_status": "active"
+    "health_status": "active",
+    "source_role": "primary",
+    "channel": ["technology"]
   },
   {
     "id": "samsung-global",
@@ -178,7 +192,9 @@
     "tier": 1,
     "language": "en",
     "fetch_method": "rss",
-    "health_status": "active"
+    "health_status": "active",
+    "source_role": "primary",
+    "channel": ["technology"]
   },
   {
     "id": "hkust-news",
@@ -201,6 +217,8 @@
     "language": "en",
     "fetch_method": "html_index",
     "health_status": "active",
+    "source_role": "primary",
+    "channel": ["technology"],
     "article_path_pattern": "^/news/[^/]+/[^/]+/?$"
   },
   {
@@ -222,7 +240,9 @@
     "tier": 1,
     "language": "en",
     "fetch_method": "rss",
-    "health_status": "active"
+    "health_status": "active",
+    "source_role": "primary",
+    "channel": ["technology"]
   },
   {
     "id": "nasa-news",
@@ -243,7 +263,9 @@
     "tier": 1,
     "language": "en",
     "fetch_method": "rss",
-    "health_status": "active"
+    "health_status": "active",
+    "source_role": "primary",
+    "channel": ["technology"]
   },
   {
     "id": "esa-science",
@@ -264,7 +286,9 @@
     "tier": 1,
     "language": "en",
     "fetch_method": "rss",
-    "health_status": "active"
+    "health_status": "active",
+    "source_role": "primary",
+    "channel": ["technology"]
   },
   {
     "id": "cas-research",
@@ -286,7 +310,9 @@
     "tier": 1,
     "language": "zh",
     "fetch_method": "html_index",
-    "health_status": "active"
+    "health_status": "active",
+    "source_role": "primary",
+    "channel": ["technology"]
   },
   {
     "id": "ithome-news",
@@ -307,6 +333,126 @@
     "tier": 3,
     "language": "zh",
     "fetch_method": "rss",
-    "health_status": "active"
+    "health_status": "active",
+    "source_role": "media",
+    "channel": ["technology"]
+  },
+  {
+    "id": "gov-cn-policy", "name": "中国政府网", "source_type": "official_policy", "adapter": "json_index",
+    "enabled": true, "conditional_requests": true,
+    "url": "https://www.gov.cn/zhengce/zuixin/ZUIXINZHENGCE.json", "allow_hosts": ["www.gov.cn", "gov.cn"],
+    "priority": 1, "region": "CN",
+    "category": ["policy", "economy", "industry", "education", "employment", "society", "infrastructure", "opportunities"],
+    "tier": 1, "language": "zh", "fetch_method": "json_index", "health_status": "active", "source_role": "primary",
+    "channel": ["policy_economy", "future_opportunities", "society_trends"]
+  },
+  {
+    "id": "ndrc-policy", "name": "国家发展和改革委员会", "source_type": "official_policy", "adapter": "html_index",
+    "enabled": true, "conditional_requests": true, "url": "https://www.ndrc.gov.cn/xxgk/wap_index.html", "allow_hosts": ["ndrc.gov.cn"],
+    "article_path_pattern": "^/xxgk/(?:zcfb|jd)/.+/t20\\d{6}_\\d+\\.html$", "priority": 1, "region": "CN",
+    "category": ["policy", "economy", "industry", "employment", "infrastructure", "opportunities"],
+    "tier": 1, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "primary",
+    "channel": ["policy_economy", "future_opportunities", "society_trends"]
+  },
+  {
+    "id": "miit-policy", "name": "工业和信息化部", "source_type": "official_policy", "adapter": "html_index",
+    "enabled": true, "conditional_requests": true, "url": "https://wap.miit.gov.cn/zwgk/", "allow_hosts": ["miit.gov.cn"],
+    "article_path_pattern": "/(?:zwgk|xwfb)/.+/art/20\\d{2}/art_[a-f0-9]+\\.html$", "priority": 1, "region": "CN",
+    "category": ["policy", "industry", "chips", "software", "infrastructure", "employment", "opportunities"],
+    "tier": 1, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "primary",
+    "channel": ["policy_economy", "technology", "future_opportunities"]
+  },
+  {
+    "id": "moe-updates", "name": "教育部", "source_type": "official_policy", "adapter": "html_index",
+    "enabled": true, "conditional_requests": true, "url": "https://hudong.moe.gov.cn/jyb_xwfb/gzdt_gzdt/", "allow_hosts": ["moe.gov.cn"],
+    "article_path_pattern": "^/jyb_xwfb/gzdt_gzdt/.+/20\\d{4}/t20\\d{6}_\\d+\\.html$", "priority": 1, "region": "CN",
+    "category": ["education", "employment", "policy", "opportunities"],
+    "tier": 1, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "primary",
+    "channel": ["future_opportunities", "policy_economy"]
+  },
+  {
+    "id": "national-data-policy", "name": "国家数据局", "source_type": "official_policy", "adapter": "html_index",
+    "enabled": true, "conditional_requests": true, "url": "https://www.nda.gov.cn/sjj/zwgk/list/index_pc_1.html", "allow_hosts": ["nda.gov.cn"],
+    "article_path_pattern": "^/sjj/zwgk/.+/20\\d{10,}_pc\\.html$", "priority": 1, "region": "CN",
+    "category": ["policy", "economy", "industry", "infrastructure", "ai", "opportunities"],
+    "tier": 1, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "primary",
+    "channel": ["policy_economy", "technology", "future_opportunities"]
+  },
+  {
+    "id": "national-statistics", "name": "国家统计局", "source_type": "official_statistics", "adapter": "html_index",
+    "enabled": true, "conditional_requests": true, "url": "https://www.stats.gov.cn/sj/zxfb/", "allow_hosts": ["stats.gov.cn"],
+    "article_path_pattern": "^/sj/zxfb/20\\d{4}/t20\\d{6}_\\d+\\.html$", "priority": 1, "region": "CN",
+    "category": ["economy", "industry", "employment", "society"],
+    "tier": 1, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "primary",
+    "channel": ["policy_economy", "society_trends", "future_opportunities"]
+  },
+  {
+    "id": "most-updates", "name": "科学技术部", "source_type": "official_policy", "adapter": "html_index",
+    "enabled": true, "conditional_requests": true, "url": "https://www.most.gov.cn/kjbgz/", "allow_hosts": ["most.gov.cn"],
+    "article_path_pattern": "^/kjbgz/20\\d{4}/t20\\d{6}_\\d+\\.html$", "priority": 1, "region": "CN",
+    "category": ["policy", "science", "industry", "education", "opportunities"],
+    "tier": 1, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "primary",
+    "channel": ["technology", "policy_economy", "future_opportunities"]
+  },
+  {
+    "id": "xinhua-tech", "name": "新华社", "source_type": "authoritative_media", "adapter": "html_index",
+    "enabled": true, "conditional_requests": true, "url": "https://www.news.cn/tech/", "allow_hosts": ["news.cn"],
+    "article_path_pattern": "^/tech/20\\d{6}/[a-f0-9]+/c\\.html$", "priority": 4, "region": "CN",
+    "category": ["industry", "science", "ai", "chips", "robotics", "mobility", "space", "infrastructure"],
+    "tier": 2, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "media",
+    "channel": ["technology", "policy_economy", "society_trends"]
+  },
+  {
+    "id": "cctv-tech", "name": "央视新闻", "source_type": "authoritative_media", "adapter": "html_index",
+    "enabled": true, "conditional_requests": true, "url": "https://news.cctv.com/tech/", "allow_hosts": ["news.cctv.com", "cctv.com"],
+    "article_path_pattern": "^/20\\d{2}/\\d{2}/\\d{2}/ARTI.+\\.shtml$", "priority": 5, "region": "CN",
+    "category": ["industry", "science", "ai", "chips", "robotics", "mobility", "space", "infrastructure", "society"],
+    "tier": 2, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "media",
+    "channel": ["technology", "society_trends", "policy_economy"]
+  },
+  {
+    "id": "sciencenet-news", "name": "中国科学报·科学网", "source_type": "professional_media", "adapter": "html_index",
+    "enabled": true, "conditional_requests": true, "url": "https://news.sciencenet.cn/", "allow_hosts": ["news.sciencenet.cn", "sciencenet.cn"],
+    "article_path_pattern": "^/htmlnews/20\\d{2}/\\d{1,2}/\\d+\\.shtm$", "priority": 5, "region": "CN",
+    "category": ["science", "education", "industry", "opportunities"],
+    "tier": 2, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "media",
+    "channel": ["technology", "future_opportunities", "deep_read"]
+  },
+  {
+    "id": "jiemian-industry", "name": "界面新闻", "source_type": "authoritative_media", "adapter": "html_index",
+    "enabled": true, "conditional_requests": true, "url": "https://www.jiemian.com/lists/4.html", "allow_hosts": ["jiemian.com"],
+    "article_path_pattern": "^/article/\\d+\\.html$", "priority": 7, "region": "CN",
+    "category": ["economy", "industry", "employment", "society", "infrastructure", "opportunities"],
+    "tier": 2, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "media",
+    "channel": ["policy_economy", "society_trends", "future_opportunities"]
+  },
+  {
+    "id": "baidu-hotlist", "name": "百度热搜", "source_type": "hotspot_discovery", "adapter": "html_index",
+    "enabled": true, "conditional_requests": true, "url": "https://top.baidu.com/board?tab=realtime", "allow_hosts": ["top.baidu.com"],
+    "priority": 20, "region": "CN",
+    "category": ["society", "economy", "industry", "education", "employment", "opportunities", "other_tech"],
+    "tier": 4, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "discovery",
+    "channel": ["society_trends", "policy_economy", "future_opportunities", "technology"]
+  },
+  {
+    "id": "federal-reserve-releases", "name": "Federal Reserve", "source_type": "official_policy", "adapter": "rss",
+    "enabled": true, "conditional_requests": true, "url": "https://www.federalreserve.gov/feeds/press_all.xml", "allow_hosts": ["federalreserve.gov"],
+    "priority": 3, "region": "US", "category": ["economy", "policy", "industry", "employment"],
+    "tier": 1, "language": "en", "fetch_method": "rss", "health_status": "active", "source_role": "primary",
+    "channel": ["policy_economy", "future_opportunities", "society_trends"]
+  },
+  {
+    "id": "ecb-press", "name": "European Central Bank", "source_type": "official_policy", "adapter": "rss",
+    "enabled": true, "conditional_requests": true, "url": "https://www.ecb.europa.eu/rss/press.html", "allow_hosts": ["ecb.europa.eu"],
+    "priority": 3, "region": "EU", "category": ["economy", "policy", "industry", "employment"],
+    "tier": 1, "language": "en", "fetch_method": "rss", "health_status": "active", "source_role": "primary",
+    "channel": ["policy_economy", "future_opportunities", "society_trends"]
+  },
+  {
+    "id": "nist-news", "name": "NIST", "source_type": "official_research", "adapter": "rss",
+    "enabled": true, "conditional_requests": true, "url": "https://www.nist.gov/news-events/news/rss.xml", "allow_hosts": ["nist.gov"],
+    "priority": 3, "region": "US", "category": ["science", "industry", "software", "infrastructure", "policy", "opportunities"],
+    "tier": 1, "language": "en", "fetch_method": "rss", "health_status": "active", "source_role": "primary",
+    "channel": ["technology", "policy_economy", "future_opportunities", "deep_read"]
   }
 ]

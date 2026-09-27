@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 DEFAULT = {"minimum": 10, "target": 14, "maximum": 18, "explore_minimum": 2,
            "personal_categories": ["ai", "robotics"], "major_score": 85,
-           "category_share": 0.65, "media_limit": 2}
+           "category_share": 0.65, "media_limit": 2, "source_share": 0.25}
 DEEP = re.compile(r"tutorial|how to|deep dive|analysis|lessons|review|report|study|research|paper|\u6559\u7a0b|\u5b9e\u64cd|\u7814\u7a76|\u8bba\u6587|\u62a5\u544a|\u590d\u76d8|\u6df1\u5ea6", re.I)
 IMPACT = re.compile(r"breakthrough|first|critical|vulnerability|launch|release|discovery|clinical|\u7a81\u7834|\u9996\u6b21|\u91cd\u5927|\u6f0f\u6d1e|\u53d1\u5e03|\u4e34\u5e8a", re.I)
 
@@ -62,7 +62,7 @@ def select(articles, now, rules, past=(), enrichments=None, limit=None):
     pool = []
     for a in articles:
         stage = level(a, now)
-        if not editorial_candidate(a) or not stage or a.source_tier > 3 or a.verification_status != "source_verified": continue
+        if not editorial_candidate(a) or not stage or a.source_tier > 3 or a.source_role == "discovery" or a.verification_status != "source_verified": continue
         if a.fingerprint in {x.get("fingerprint") for x in past} or normalized_url(a.original_url) in urls or any(same_event(a.title, t) for t in titles if t): continue
         e = enrichments.get(a.id)
         importance = e.importance_score if e else 60 + 15 * bool(IMPACT.search(a.title))
@@ -78,6 +78,7 @@ def select(articles, now, rules, past=(), enrichments=None, limit=None):
     cap = min(limit or rules["maximum"], rules["target"])
     if sum(x[3] >= rules["major_score"] for x in pool if x[1] <= 2) >= 10:
         cap = min(limit or rules["maximum"], rules["maximum"])
+    source_limit = max(1, int(cap * float(rules.get("source_share", .25))))
     for stage in (1,2,3,4):
         candidates = [x for x in pool if x[1] == stage]
         while candidates and len(selected) < cap:
@@ -87,12 +88,12 @@ def select(articles, now, rules, past=(), enrichments=None, limit=None):
             def ordering(x):
                 a, _, score, importance = x
                 diversity = (20 if explore < rules["explore_minimum"] and a.category not in rules["personal_categories"] else 0)
-                penalty = 0 if importance >= rules["major_score"] else (25 if categories[a.category] >= max(1,int(cap*rules["category_share"])) else 0) + (25 if a.source_tier > 1 and sources[a.source] >= rules["media_limit"] else 0)
+                penalty = 0 if importance >= rules["major_score"] else (25 if categories[a.category] >= max(1,int(cap*rules["category_share"])) else 0) + (25 if a.source_tier > 1 and sources[a.source] >= rules["media_limit"] else 0) + (30 if sources[a.source] >= source_limit else 0)
                 return (importance >= rules["major_score"], int(importance // 10), score + diversity - penalty, a.published_at, a.id)
             x = max(candidates, key=ordering); candidates.remove(x)
             a = x[0]
             if a.fingerprint in seen_fp or normalized_url(a.original_url) in seen_url or any(same_event(a.title,b[0].title) for b in selected): continue
-            if x[3] < rules["major_score"] and ((a.source_tier > 1 and sources[a.source] >= rules["media_limit"]) or categories[a.category] >= max(1, int(cap * rules["category_share"]))):
+            if x[3] < rules["major_score"] and ((a.source_tier > 1 and sources[a.source] >= rules["media_limit"]) or sources[a.source] >= source_limit or categories[a.category] >= max(1, int(cap * rules["category_share"]))):
                 deferred.append(x)
                 continue
             selected.append(x); seen_fp.add(a.fingerprint); seen_url.add(normalized_url(a.original_url))
@@ -106,11 +107,16 @@ def select(articles, now, rules, past=(), enrichments=None, limit=None):
         if a.fingerprint in seen_fp or normalized_url(a.original_url) in seen_url or any(same_event(a.title,b[0].title) for b in selected): continue
         selected.append(x); seen_fp.add(a.fingerprint); seen_url.add(normalized_url(a.original_url))
         diversity_exception = True
+    if any(count > source_limit for count in Counter(a.source for a, *_ in selected).values()):
+        diversity_exception = True
     metadata = {}
     for a, stage, score, importance in selected:
         section = "deep_read" if deep_read(a) else "major_tech" if importance >= rules["major_score"] else "for_you" if a.category in rules["personal_categories"] else "explore"
+        channel = "deep_read" if deep_read(a) else a.channel
         metadata[a.id] = {"supply_level":stage,"section":section,"ranking_score":round(score,2),
                           "content_type":"deep_read" if deep_read(a) else "news", "catch_up":stage==3,
                           "fingerprint":a.fingerprint, "article_id":a.id,
-                          "source_region":a.source_region,"source_tier":a.source_tier}
-    return [x[0] for x in selected], metadata, {"diversity_exception":diversity_exception,"levels":stats,"selected":len(selected),"shortfall":max(0,rules["minimum"]-len(selected)),"explore_count":sum(a.category not in rules["personal_categories"] for a,*_ in selected),"sources":len({a.source for a,*_ in selected}),"categories":dict(Counter(a.category for a,*_ in selected)),"deep_read_candidates":sum(deep_read(a) for a, *_ in pool),"score_mode":"semantic importance when cached; heuristic preselection otherwise"}
+                          "source_region":a.source_region,"source_tier":a.source_tier,
+                          "source_role":a.source_role,"channel":channel}
+    shortfall = max(0, rules["minimum"] - len(selected))
+    return [x[0] for x in selected], metadata, {"diversity_exception":diversity_exception,"levels":stats,"selected":len(selected),"shortfall":shortfall,"minimum_not_met_reason":"all real source-verified candidates were exhausted" if shortfall else None,"explore_count":sum(a.category not in rules["personal_categories"] for a,*_ in selected),"sources":len({a.source for a,*_ in selected}),"categories":dict(Counter(a.category for a,*_ in selected)),"channels":dict(Counter(("deep_read" if deep_read(a) else a.channel) for a,*_ in selected)),"source_counts":dict(Counter(a.source for a,*_ in selected)),"source_share_limit":source_limit,"deep_read_candidates":sum(deep_read(a) for a, *_ in pool),"score_mode":"semantic importance when cached; heuristic preselection otherwise"}

@@ -99,7 +99,7 @@ def publish_latest_report(pipeline_root: Path, site_root: Path) -> Path:
     highlights = [str(item.get("title_cn", "")) for item in items[:3] if str(item.get("title_cn", "")).strip()]
     report = {
         "schema_version": schema_version,
-        "category": "tech" if schema_version >= 2 else "ai",
+        "category": "radar" if schema_version >= 3 else "tech" if schema_version >= 2 else "ai",
         "report_date": report_date,
         "published_at": published_at.isoformat(),
         "article_count": len(items),
@@ -114,7 +114,7 @@ def publish_latest_report(pipeline_root: Path, site_root: Path) -> Path:
     if not isinstance(previous, list):
         raise PublishError("reports.json has an invalid reports list")
     summary = {
-        "category": "tech" if schema_version >= 2 else "ai", "schema_version": schema_version,
+        "category": "radar" if schema_version >= 3 else "tech" if schema_version >= 2 else "ai", "schema_version": schema_version,
         "report_date": report_date, "published_at": published_at.isoformat(),
         "article_count": len(items), "estimated_reading_minutes": reading_minutes, "highlights": highlights,
     }

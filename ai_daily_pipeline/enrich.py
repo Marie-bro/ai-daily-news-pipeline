@@ -11,22 +11,21 @@ from urllib.parse import urlparse
 from .deepseek import DeepSeekClient, DeepSeekError
 from .bilingual import BilingualValidationError, normalize_fact_schema, validate_semantic_consistency
 from .models import Article, Enrichment
-from .sources import BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS
+from .sources import BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS, TECH_CATEGORIES
 from .store import ArticleStore
 from .supply import policy, select, history, same_event, deep_read
 
 TASK_NAME = "phase5_5_bilingual_tech_daily"
-TECH_CATEGORIES = {"ai", "chips", "consumer_tech", "software", "robotics", "mobility", "space", "science", "internet", "other_tech"}
 
 # This prompt is deliberately fixed and always placed first so repeated runs can use DeepSeek context caching.
-NEWS_SYSTEM_PROMPT = """You prepare a concise bilingual Tech Daily from verified source candidates.
+NEWS_SYSTEM_PROMPT = """You prepare a concise bilingual MarieSpace Radar from verified source candidates covering technology, industry, policy, economy, social trends, future opportunities, and deep reads.
 Use only facts contained in each supplied candidate. Never invent an event, date, source, URL, quote, product capability, metric, certainty, or background fact. Do not use outside knowledge. The supplied id, source, published_at, original_url, and title_original are source metadata; copy them exactly when requested.
 
 For every candidate, create one compact shared fact_schema first, then render English and Chinese from that exact schema. The two rendered languages may use natural phrasing, but neither may add a fact the fact_schema does not contain. fact_schema.article_id must equal id and fact_schema.category must equal category. fact_schema.core_facts must contain 1–4 material facts only. Each fact must contain: id, type, value, rendered_in (one or more of title, what_happened, why_it_matters), english_forms, and chinese_forms. Use one short form per language unless a second form is required for a natural translation. Include only hard facts actually rendered: companies, institutions, products, technologies, dates, numbers, versions, support/availability, scope, limitations, and release intent. MIT / Massachusetts Institute of Technology and 麻省理工学院 may be forms of one fact; 1.2 billion and 12 亿 may be forms of one number fact. Do not force word-for-word translation.
 
-Also provide the compact schema fields key_entities, dates, numbers, versions, products, companies, technologies, scope, limitations, and importance_reasons. Keep each list to at most three short entries; scope must be one short clause; limitations and importance_reasons must have at most one entry each. These fields describe only verified source material. category must be exactly one of: ai, chips, consumer_tech, software, robotics, mobility, space, science, internet, other_tech. Produce title_en then title_cn; what_happened_en then what_happened; why_it_matters_en then why_it_matters. English is first and Chinese is second. title_cn, what_happened, and why_it_matters are Chinese. importance_score is an integer from 0 to 100. Do not generate original-body excerpts, key-point arrays, full translations, study expressions, relevance fields, or additional summaries.
+Also provide the compact schema fields key_entities, dates, numbers, versions, products, companies, technologies, scope, limitations, and importance_reasons. Keep each list to at most three short entries; scope must be one short clause; limitations and importance_reasons must have at most one entry each. These fields describe only verified source material. category must be exactly one of: ai, chips, consumer_tech, software, robotics, mobility, space, science, internet, other_tech, policy, economy, industry, education, employment, society, infrastructure, opportunities. Produce title_en then title_cn; what_happened_en then what_happened; why_it_matters_en then why_it_matters. English is first and Chinese is second. title_cn, what_happened, and why_it_matters are Chinese. For policy items, state the measure, affected groups, implementation timing and scope when present, then explain concrete effects on industry, education, employment, skills or future opportunities using only supplied facts. importance_score is an integer from 0 to 100. Do not generate original-body excerpts, key-point arrays, full translations, study expressions, relevance fields, or additional summaries.
 
-Prefer high-value first-party facts. Tier 4 candidates are discovery clues only and must receive importance_score 0 unless the supplied text itself identifies a traceable primary source. Importance must reflect global technology significance, evidence, novelty and public impact, never personal AI interests. Evaluate tutorials/research/analysis by lasting learning and practical value. Keep each text field short.
+Prefer high-value first-party facts. Tier 4 candidates are discovery clues only and must receive importance_score 0 unless the supplied text itself identifies a traceable primary source. Importance must reflect global significance, evidence, novelty, economic or social impact, and consequences for learning, careers and future choices, never personal AI interests. Ordinary entertainment or low-value trending topics are ineligible. Evaluate tutorials/research/analysis by lasting learning and practical value. Keep each text field short.
 Return only valid JSON, with no Markdown, using exactly this outer shape: {"items":[{"id":"","category":"","fact_schema":{"article_id":"","category":"","core_facts":[{"id":"f1","type":"","value":"","rendered_in":["title"],"english_forms":[""],"chinese_forms":[""]}],"key_entities":[],"dates":[],"numbers":[],"versions":[],"products":[],"companies":[],"technologies":[],"scope":"","limitations":[],"importance_reasons":[]},"title_en":"","title_cn":"","title_original":"","source":"","published_at":"","original_url":"","what_happened_en":"","what_happened":"","why_it_matters_en":"","why_it_matters":"","importance_score":0}]}.
 """
 
@@ -69,6 +68,9 @@ def _candidate_payload(articles: list[Article], per_article_characters: int) -> 
             "content_type_hint": "deep_read" if deep_read(article) else "news",
             "source_region": article.source_region,
             "source_tier": article.source_tier,
+            "source_role": article.source_role,
+            "channel_hint": article.channel,
+            "category_hint": article.category,
             "clean_text": article.clean_text[:per_article_characters],
         }
         for article in articles
@@ -242,6 +244,7 @@ def _eligible_content(article: Article) -> bool:
     host = (parsed.hostname or "").lower()
     return (article.verification_status == "source_verified" and article.category in TECH_CATEGORIES
             and article.source_tier <= 3
+            and article.source_role != "discovery"
             and parsed.scheme == "https" and bool(host)
             and parsed.path.rstrip("/").lower() not in {"", "/research", "/news", "/about", "/newsroom", "/en/news"}
             and not any(host == blocked or host.endswith("." + blocked) for blocked in BLOCKED_CONTENT_HOSTS)

@@ -9,6 +9,18 @@ from ai_daily_pipeline.store import ArticleStore
 
 
 class StoreTests(unittest.TestCase):
+    def test_source_health_preserves_last_success_across_failure(self):
+        with TemporaryDirectory() as directory:
+            store = ArticleStore(Path(directory) / "health.sqlite3")
+            try:
+                self.assertEqual(store.record_source_health("source", "ok", "2026-09-27T01:00:00+00:00", 3), "2026-09-27T01:00:00+00:00")
+                self.assertEqual(store.record_source_health("source", "error", "2026-09-27T02:00:00+00:00", 0, "timeout"), "2026-09-27T01:00:00+00:00")
+                row = store.source_health_rows()["source"]
+                self.assertEqual(row["status"], "error")
+                self.assertEqual(row["latest_success_at"], "2026-09-27T01:00:00+00:00")
+            finally:
+                store.close()
+
     def test_existing_usage_table_gains_raw_usage_column(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "old.sqlite3"

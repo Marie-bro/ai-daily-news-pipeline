@@ -36,6 +36,7 @@ class PublishTests(unittest.TestCase):
             output = publish_latest_report(pipeline, site)
             report = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(report["schema_version"], 3)
+            self.assertEqual(report["category"], "radar")
             self.assertEqual(report["items"][0]["why_it_matters_en"], "It improves compute efficiency.")
             latest.write_text(json.dumps({"schema_version": 3, "generated_at": "2026-09-13T17:19:08+00:00", "items": [{key: value for key, value in item.items() if key != "title_en"}]}, ensure_ascii=False), encoding="utf-8")
             with self.assertRaises(PublishError):

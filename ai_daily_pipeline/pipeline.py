@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .extract import extract_article
 from .models import Article, SourceItem
-from .sources import TECH_TERMS, BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS, SourceDefinition, collect_source, fetch, load_sources
+from .sources import RADAR_TERMS, BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS, SourceDefinition, classify_radar, collect_source, fetch, load_sources
 from .store import ArticleStore
 from .text import article_id, fingerprint
 
@@ -51,6 +51,8 @@ def _collapse_release_bursts(articles: list[Article]) -> list[Article]:
 
 
 def _candidate_to_article(item: SourceItem, now: datetime, source: SourceDefinition) -> Article | None:
+    if source.source_role == "discovery":
+        return None
     page = fetch(item.url, allow_hosts=source.allow_hosts)
     extracted = extract_article(page, item.title, source.cleaning)
     published = extracted.published_at or item.published_at
@@ -60,17 +62,18 @@ def _candidate_to_article(item: SourceItem, now: datetime, source: SourceDefinit
     if BLOCKED_CONTENT_TERMS.search(title + " " + extracted.clean_text[:3_000]):
         return None
     # Feed indexes can contain generic company posts; retain only actual technology candidates.
-    if not TECH_TERMS.search(title + " " + extracted.clean_text[:3_000]):
+    if not RADAR_TERMS.search(title + " " + extracted.clean_text[:3_000]):
         return None
     published = published.astimezone(UTC)
     body_fingerprint = fingerprint(title, extracted.clean_text)
+    category, channel = classify_radar(title + " " + extracted.clean_text[:600], item.categories, item.channels)
     return Article(
-        id=article_id(item.url), category=item.categories[0], title=title, original_title=title,
+        id=article_id(item.url), category=category, title=title, original_title=title,
         source=item.source, source_type=item.source_type, published_at=published.isoformat(),
         original_url=item.url, language=_language(extracted.clean_text), raw_text=extracted.raw_text,
         clean_text=extracted.clean_text, fingerprint=body_fingerprint,
         created_at=now.astimezone(UTC).isoformat(), verification_status="source_verified",
-        source_region=item.region, source_tier=item.tier,
+        source_region=item.region, source_tier=item.tier, source_role=item.source_role, channel=channel,
     )
 
 
@@ -87,7 +90,8 @@ def check_sources(root: Path) -> list[dict[str, object]]:
                 if len(extracted.clean_text) < 120:
                     status = "degraded"
             results.append({"source_id": source.source_id, "status": status, "items": len(collection.items),
-                            "region": source.region, "tier": source.tier, "configured_health": source.health_status,
+                            "region": source.region, "tier": source.tier, "source_role": source.source_role,
+                            "channel": list(source.channels), "configured_health": source.health_status,
                             "checked_at": datetime.now(UTC).isoformat()})
         except Exception as exc:
             results.append({"source_id": source.source_id, "status": "error", "items": 0,
@@ -108,17 +112,22 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
             try:
                 result = collect_source(source, cache)
                 source_items.extend(result.items)
+                latest_success = cache.record_source_health(source.source_id, result.status, now.isoformat(), len(result.items)) if cache else (now.isoformat() if result.status == "ok" else None)
                 source_health.append({"source_id": source.source_id, "status": result.status,
-                                      "region": source.region, "tier": source.tier, "configured_health": source.health_status,
+                                      "region": source.region, "tier": source.tier, "source_role": source.source_role,
+                                      "channel": list(source.channels), "configured_health": source.health_status,
                                       "items": len(result.items), "not_modified": result.not_modified,
                                       "used_conditional_request": result.used_conditional_request,
-                                      "checked_at": now.isoformat()})
+                                      "checked_at": now.isoformat(), "latest_success_at": latest_success})
             except Exception as exc:  # An unavailable source must not invent replacements.
                 message = f"{source.source_id}: {type(exc).__name__}: {exc}"
                 errors.append(message)
+                latest_success = cache.record_source_health(source.source_id, "error", now.isoformat(), 0, message) if cache else None
                 source_health.append({"source_id": source.source_id, "status": "error", "items": 0,
+                                      "region": source.region, "tier": source.tier, "source_role": source.source_role,
+                                      "channel": list(source.channels), "configured_health": source.health_status,
                                       "not_modified": False, "used_conditional_request": False,
-                                      "checked_at": now.isoformat(), "error": message})
+                                      "checked_at": now.isoformat(), "latest_success_at": latest_success, "error": message})
     finally:
         if cache:
             cache.close()

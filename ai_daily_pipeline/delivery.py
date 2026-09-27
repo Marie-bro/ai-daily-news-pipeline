@@ -130,12 +130,12 @@ def card_for_report(report: dict[str, object], url: str) -> dict[str, object]:
         "tag": "action",
         "actions": [{
             "tag": "button", "type": "primary", "url": url,
-            "text": {"tag": "plain_text", "content": "View Full Tech Daily\n\u67e5\u770b\u5b8c\u6574\u79d1\u6280\u65e5\u62a5"},
+            "text": {"tag": "plain_text", "content": "View MarieSpace Radar\n\u67e5\u770b MarieSpace \u6bcf\u65e5\u96f7\u8fbe"},
         }],
     })
     return {
         "config": {"wide_screen_mode": True},
-        "header": {"template": "blue", "title": {"tag": "plain_text", "content": "MarieSpace Tech Daily\nMarieSpace \u79d1\u6280\u65e5\u62a5"}},
+        "header": {"template": "blue", "title": {"tag": "plain_text", "content": "MarieSpace Radar\nMarieSpace \u6bcf\u65e5\u96f7\u8fbe"}},
         "elements": elements,
     }
 

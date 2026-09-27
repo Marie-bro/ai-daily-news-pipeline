@@ -57,6 +57,18 @@ class SupplyTests(unittest.TestCase):
         class E: importance_score=20
         a=story(1)
         self.assertEqual(select([a,story(2,tier=4)],NOW,DEFAULT,enrichments={a.id:E()})[0],[])
+
+    def test_discovery_source_never_enters_formal_selection(self):
+        candidate = replace(story(1), source_role="discovery", source_tier=4, channel="society_trends")
+        picked, _, _ = select([candidate], NOW, DEFAULT)
+        self.assertEqual(picked, [])
+
+    def test_channel_metadata_is_preserved_without_model_calls(self):
+        candidate = replace(story(1, category="policy"), channel="policy_economy", source_role="primary")
+        picked, metadata, diagnostics = select([candidate], NOW, DEFAULT)
+        self.assertEqual(picked, [candidate])
+        self.assertEqual(metadata[candidate.id]["channel"], "policy_economy")
+        self.assertEqual(diagnostics["channels"], {"policy_economy": 1})
     def test_cached_unpublished_summary_needs_no_model_call(self):
         with TemporaryDirectory() as d:
             root=Path(d); store=ArticleStore(root/'data/ai_daily.sqlite3'); a=article();store.add(a)
@@ -82,3 +94,10 @@ class SupplyTests(unittest.TestCase):
             importance_score=95
         major,_,_=select(values,NOW,DEFAULT,enrichments={item.id:E() for item in values})
         self.assertEqual(len(major),18)
+
+    def test_major_event_source_concentration_is_recorded_as_an_exception(self):
+        values = [replace(story(i, title=chr(0x4e00 + i * 97)), source="Major Event Wire") for i in range(12)]
+        class E:
+            importance_score = 95
+        _, _, diagnostics = select(values, NOW, DEFAULT, enrichments={item.id: E() for item in values})
+        self.assertTrue(diagnostics["diversity_exception"])

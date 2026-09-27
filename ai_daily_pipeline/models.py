@@ -18,6 +18,8 @@ class SourceItem:
     categories: tuple[str, ...] = ("other_tech",)
     tier: int = 3
     language: str = "en"
+    source_role: str = "media"
+    channels: tuple[str, ...] = ("technology",)
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,8 @@ class Article:
     verification_status: str
     source_region: str = "unknown"
     source_tier: int = 3
+    source_role: str = "media"
+    channel: str = "technology"
 
     def to_dict(self) -> dict[str, str]:
         return asdict(self)

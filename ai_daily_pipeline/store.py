@@ -81,6 +81,14 @@ CREATE TABLE IF NOT EXISTS source_fetch_cache (
   etag TEXT,
   last_modified TEXT
 );
+CREATE TABLE IF NOT EXISTS source_health (
+  source_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  checked_at TEXT NOT NULL,
+  latest_success_at TEXT,
+  items INTEGER NOT NULL DEFAULT 0,
+  error_summary TEXT
+);
 CREATE TABLE IF NOT EXISTS tech_enrichments (
   article_id TEXT PRIMARY KEY REFERENCES articles(id), task TEXT NOT NULL, generated_at TEXT NOT NULL,
   model TEXT NOT NULL, title_cn TEXT NOT NULL, title_original TEXT NOT NULL, source TEXT NOT NULL,
@@ -105,6 +113,10 @@ class ArticleStore:
             self.connection.execute("ALTER TABLE articles ADD COLUMN source_region TEXT NOT NULL DEFAULT 'unknown'")
         if "source_tier" not in article_columns:
             self.connection.execute("ALTER TABLE articles ADD COLUMN source_tier INTEGER NOT NULL DEFAULT 3")
+        if "source_role" not in article_columns:
+            self.connection.execute("ALTER TABLE articles ADD COLUMN source_role TEXT NOT NULL DEFAULT 'media'")
+        if "channel" not in article_columns:
+            self.connection.execute("ALTER TABLE articles ADD COLUMN channel TEXT NOT NULL DEFAULT 'technology'")
         tech_columns = {row[1] for row in self.connection.execute("PRAGMA table_info(tech_enrichments)")}
         for column in ("title_en", "what_happened_en", "why_it_matters_en"):
             if column not in tech_columns:
@@ -132,13 +144,31 @@ class ArticleStore:
         )
         self.connection.commit()
 
+    def record_source_health(self, source_id: str, status: str, checked_at: str, items: int,
+                             error_summary: str | None = None) -> str | None:
+        previous = self.connection.execute("SELECT latest_success_at FROM source_health WHERE source_id = ?", (source_id,)).fetchone()
+        latest_success = checked_at if status == "ok" else (previous[0] if previous else None)
+        self.connection.execute(
+            """INSERT INTO source_health (source_id,status,checked_at,latest_success_at,items,error_summary) VALUES (?,?,?,?,?,?)
+               ON CONFLICT(source_id) DO UPDATE SET status=excluded.status,checked_at=excluded.checked_at,
+               latest_success_at=excluded.latest_success_at,items=excluded.items,error_summary=excluded.error_summary""",
+            (source_id, status, checked_at, latest_success, items, error_summary),
+        )
+        self.connection.commit()
+        return latest_success
+
+    def source_health_rows(self) -> dict[str, dict[str, object]]:
+        cursor = self.connection.execute("SELECT source_id,status,checked_at,latest_success_at,items,error_summary FROM source_health")
+        return {row[0]: {"source_id": row[0], "status": row[1], "checked_at": row[2], "latest_success_at": row[3],
+                         "items": row[4], "error_summary": row[5]} for row in cursor.fetchall()}
+
     def add(self, article: Article) -> bool:
         if self.is_known(article.original_url, article.fingerprint):
             return False
         self.connection.execute(
             """INSERT INTO articles
-            (id,category,title,original_title,source,source_type,published_at,original_url,language,raw_text,clean_text,fingerprint,created_at,verification_status,source_region,source_tier)
-            VALUES (:id,:category,:title,:original_title,:source,:source_type,:published_at,:original_url,:language,:raw_text,:clean_text,:fingerprint,:created_at,:verification_status,:source_region,:source_tier)""",
+            (id,category,title,original_title,source,source_type,published_at,original_url,language,raw_text,clean_text,fingerprint,created_at,verification_status,source_region,source_tier,source_role,channel)
+            VALUES (:id,:category,:title,:original_title,:source,:source_type,:published_at,:original_url,:language,:raw_text,:clean_text,:fingerprint,:created_at,:verification_status,:source_region,:source_tier,:source_role,:channel)""",
             article.to_dict(),
         )
         self.connection.commit()

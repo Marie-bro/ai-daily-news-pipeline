@@ -1,6 +1,6 @@
-﻿# Tech Daily 数据流水线
+﻿# MarieSpace Radar 数据流水线
 
-该项目负责 MarieSpace Tech Daily 的真实科技资讯采集、清洗、精简整理和静态日报数据发布。所有正式资讯保留可追溯来源，不虚构新闻、链接或来源。
+该项目负责 MarieSpace Radar 的真实高价值信息采集、清洗、精简整理和静态日报数据发布，覆盖科技与产业、政策与经济、社会趋势、未来机会和深度阅读。所有正式资讯保留可追溯来源，不虚构新闻、链接或来源。
 
 ## 已完成能力
 
@@ -28,7 +28,7 @@ py -3 run_daily_delivery.py --report-date 2026-09-20 --verify-url
 py -3 run_daily_delivery.py --scheduled
 ```
 
-`run_publish.py` 不调用 DeepSeek。它读取 `data/latest-enrichment.json`，写入相邻站点的 `data/daily/ai/YYYY-MM-DD.json` 并更新 `data/reports.json`。保留 `/daily/ai/` 路径用于历史链接兼容；新版数据使用 `schema_version: 3`、`category: tech` 和英文在前的双语字段。
+`run_publish.py` 不调用 DeepSeek。它读取 `data/latest-enrichment.json`，写入相邻站点的 `data/daily/ai/YYYY-MM-DD.json` 并更新 `data/reports.json`。保留 `/daily/ai/` 路径用于历史链接兼容；新版数据使用 `schema_version: 3`、`category: radar` 和英文在前的双语字段。
 
 ## Phase 6 推送
 
@@ -49,16 +49,16 @@ powershell -ExecutionPolicy Bypass -File .\deploy\install-phase6-task.ps1
 `config/sources.json` 继续使用 JSON + Source Adapter。每项必须定义：
 
 - `id`、`name`、`region`、`category`、`tier`、`language`
-- `source_type`、`enabled`、`adapter`、`fetch_method`、`health_status`
+- `source_type`、`source_role`、`channel`、`enabled`、`adapter`、`fetch_method`、`health_status`
 - HTTPS `url`、`allow_hosts`、`priority`
 
-支持 RSS、Atom 和 HTML Index。可选站点级 `cleaning`、`article_path_pattern` 和 `conditional_requests`。正式采集保存 ETag / Last-Modified，逐源健康结果写入 `data/latest-run.json`。Tier 4 仅作线索，不直接进入正式整理。
+支持 RSS、Atom、HTML Index 和官方 JSON Index。可选站点级 `cleaning`、`article_path_pattern` 和 `conditional_requests`。正式采集保存 ETag / Last-Modified，逐源健康结果写入 SQLite 和 `data/latest-run.json`。`discovery` / Tier 4 仅作线索，不直接进入正式整理。
 
 当前启用来源覆盖中国大陆、港澳台地区、美国、欧洲、日本和韩国。正式内容继续排除 GitHub、OpenAI 域名和相关内容。
 
-## Tech Daily 结构
+## MarieSpace Radar 结构
 
-每条新版资讯包含：`category`、`title_cn`、`title_original`、`source`、`published_at`、`original_url`、`original_language`、`what_happened`、`why_it_matters` 和 `importance_score`。
+每条新版资讯在原有 `category` 之上保留 `channel`，并包含 `source_role`、双语标题、双语 `what_happened` / `why_it_matters`、`source`、`published_at`、`original_url`、`original_language` 和 `importance_score`。
 
 模型、密钥和限额只从环境变量或已有 Phase 1 本地 `.env` 读取。模型名不在多个文件中硬编码。实际 input/output/total/cache hit/cache miss 及完整原始 usage JSON 写入 SQLite。
 

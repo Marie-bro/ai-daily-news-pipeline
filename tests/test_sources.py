@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from ai_daily_pipeline.sources import SourceDefinition, _feed_items, collect_source_items, load_sources
+from ai_daily_pipeline.sources import SourceDefinition, _feed_items, classify_radar, collect_source_items, load_sources
 
 
 class SourceTests(unittest.TestCase):
@@ -13,6 +13,16 @@ class SourceTests(unittest.TestCase):
         self.assertTrue(all(source.tier in {1, 2, 3, 4} for source in sources))
         self.assertTrue(all(source.categories for source in sources))
         self.assertTrue(all(source.fetch_method == source.adapter for source in sources))
+        self.assertGreaterEqual(len([source for source in sources if source.enabled]), 25)
+        self.assertTrue(all(source.source_role in {"primary", "media", "discovery"} for source in sources))
+        self.assertTrue(all(source.channels for source in sources))
+        self.assertTrue(all(source.tier == 4 for source in sources if source.source_role == "discovery"))
+
+    def test_policy_and_opportunity_classification_is_deterministic(self):
+        categories = ("policy", "economy", "industry", "education", "employment", "opportunities")
+        channels = ("policy_economy", "future_opportunities")
+        self.assertEqual(classify_radar("高校毕业生就业支持政策", categories, channels), ("employment", "future_opportunities"))
+        self.assertEqual(classify_radar("制造业投资增长规划", categories, channels), ("policy", "policy_economy"))
 
     def test_rss_parsing_keeps_source_metadata(self):
         source = SourceDefinition("test", "Official", "official_blog", "rss", "https://example.com/feed", ("example.com",), 1)
