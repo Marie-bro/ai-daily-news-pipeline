@@ -106,6 +106,7 @@ def publish_latest_report(pipeline_root: Path, site_root: Path) -> Path:
         "estimated_reading_minutes": reading_minutes,
         "highlights": highlights,
         "items": items,
+        "supply": latest.get("supply", {}),
     }
     index_path = site_root / "data" / "reports.json"
     existing = _read_json(index_path) if index_path.exists() else {"reports": []}

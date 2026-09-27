@@ -1,0 +1,13 @@
+{
+  "minimum": 10,
+  "target": 14,
+  "maximum": 18,
+  "explore_minimum": 2,
+  "personal_categories": [
+    "ai",
+    "robotics"
+  ],
+  "major_score": 85,
+  "category_share": 0.65,
+  "media_limit": 2
+}

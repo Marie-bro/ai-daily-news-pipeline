@@ -64,6 +64,7 @@ class Enrichment:
     why_it_matters: str
     why_it_matters_en: str
     importance_score: int
+    fact_schema_json: str = "{}"
 
     def to_record(self) -> dict[str, str]:
         return asdict(self)

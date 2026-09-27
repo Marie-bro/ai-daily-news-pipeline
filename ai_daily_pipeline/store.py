@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS tech_enrichments (
   model TEXT NOT NULL, title_cn TEXT NOT NULL, title_original TEXT NOT NULL, source TEXT NOT NULL,
   published_at TEXT NOT NULL, original_url TEXT NOT NULL, category TEXT NOT NULL,
   original_language TEXT NOT NULL, what_happened TEXT NOT NULL, why_it_matters TEXT NOT NULL,
-  importance_score INTEGER NOT NULL
+  importance_score INTEGER NOT NULL, fact_schema_json TEXT NOT NULL DEFAULT '{}'
 );
 """
 
@@ -109,6 +109,8 @@ class ArticleStore:
         for column in ("title_en", "what_happened_en", "why_it_matters_en"):
             if column not in tech_columns:
                 self.connection.execute(f"ALTER TABLE tech_enrichments ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+        if "fact_schema_json" not in tech_columns:
+            self.connection.execute("ALTER TABLE tech_enrichments ADD COLUMN fact_schema_json TEXT NOT NULL DEFAULT '{}'")
         self.connection.commit()
 
     def is_known(self, url: str, body_fingerprint: str) -> bool:
@@ -156,14 +158,23 @@ class ArticleStore:
         fields = [column[0] for column in self.connection.execute("SELECT * FROM articles LIMIT 0").description]
         return [Article(**dict(zip(fields, row, strict=True))) for row in rows]
 
+    def supply_inventory(self, after: str, before: str):
+        cursor = self.connection.execute("SELECT * FROM articles WHERE published_at >= ? AND published_at <= ? ORDER BY published_at DESC", (after, before))
+        fields = [c[0] for c in cursor.description]
+        articles = [Article(**dict(zip(fields, row))) for row in cursor]
+        cursor = self.connection.execute("SELECT * FROM tech_enrichments")
+        fields = [c[0] for c in cursor.description]
+        enrichments = {row[0]: Enrichment(**dict(zip(fields, row))) for row in cursor}
+        return articles, enrichments
+
     def save_enrichment(self, enrichment: Enrichment, replace: bool = False) -> None:
         verb = "INSERT OR REPLACE" if replace else "INSERT"
         self.connection.execute(
             f"""{verb} INTO tech_enrichments
             (article_id,task,generated_at,model,title_cn,title_en,title_original,source,published_at,original_url,
-             category,original_language,what_happened,what_happened_en,why_it_matters,why_it_matters_en,importance_score)
+             category,original_language,what_happened,what_happened_en,why_it_matters,why_it_matters_en,importance_score,fact_schema_json)
             VALUES (:article_id,:task,:generated_at,:model,:title_cn,:title_en,:title_original,:source,:published_at,:original_url,
-                    :category,:original_language,:what_happened,:what_happened_en,:why_it_matters,:why_it_matters_en,:importance_score)""",
+                     :category,:original_language,:what_happened,:what_happened_en,:why_it_matters,:why_it_matters_en,:importance_score,:fact_schema_json)""",
             enrichment.to_record(),
         )
 

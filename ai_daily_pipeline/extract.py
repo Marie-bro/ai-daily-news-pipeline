@@ -100,7 +100,7 @@ def extract_article(html: str, fallback_title: str, rules: CleaningRules | None 
     raw = clean_text(" ".join(parser.text), limit=60_000)
     body = clean_text(raw)
     title = clean_text(_meta(html, "og:title") or " ".join(parser.title) or fallback_title, limit=500)
-    date_value = _meta(html, "article:published_time") or _meta(html, "date")
+    date_value = _meta(html, "article:published_time") or _meta(html, "date") or _meta(html, "PubDate")
     if not date_value:
         match = re.search(r'<time[^>]+datetime=["\']([^"\']+)', html, re.I)
         date_value = match.group(1) if match else None

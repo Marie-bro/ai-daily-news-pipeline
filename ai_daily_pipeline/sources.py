@@ -18,6 +18,7 @@ from .text import parse_datetime
 
 USER_AGENT = "AI-Daily-Collector/0.1 (+personal research; contact: local operator)"
 TECH_TERMS = re.compile(r"\b(ai|deepseek|anthropic|claude|gemini|agent|mcp|model|llm|api|machine learning|generative|chip|semiconductor|software|robot|robotics|vehicle|ev|mobility|space|satellite|science|research|internet|cloud|security|processor|device|smartphone|quantum)\b", re.I)
+TECH_TERMS = re.compile(TECH_TERMS.pattern + r"|energy|battery|materials|biotech|medical|genome|fusion|privacy|\u79d1\u6280|\u82af\u7247|\u80fd\u6e90|\u7535\u6c60|\u6750\u6599|\u751f\u7269|\u533b\u7597|\u91cf\u5b50|\u822a\u5929|\u7f51\u7edc|\u5b89\u5168|\u8f6f\u4ef6|\u7814\u7a76|\u673a\u5668\u4eba", re.I)
 AI_TERMS = TECH_TERMS  # Backward-compatible import name.
 BLOCKED_CONTENT_HOSTS = ("github.com", "openai.com")
 BLOCKED_CONTENT_TERMS = re.compile(r"\b(openai|chatgpt|codex|github)\b", re.I)

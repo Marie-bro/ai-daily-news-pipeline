@@ -1,0 +1,116 @@
+"""Deterministic supply policy: no model calls and no invented factual scores."""
+from collections import Counter
+from datetime import datetime
+from difflib import SequenceMatcher
+import json
+import re
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+DEFAULT = {"minimum": 10, "target": 14, "maximum": 18, "explore_minimum": 2,
+           "personal_categories": ["ai", "robotics"], "major_score": 85,
+           "category_share": 0.65, "media_limit": 2}
+DEEP = re.compile(r"tutorial|how to|deep dive|analysis|lessons|review|report|study|research|paper|\u6559\u7a0b|\u5b9e\u64cd|\u7814\u7a76|\u8bba\u6587|\u62a5\u544a|\u590d\u76d8|\u6df1\u5ea6", re.I)
+IMPACT = re.compile(r"breakthrough|first|critical|vulnerability|launch|release|discovery|clinical|\u7a81\u7834|\u9996\u6b21|\u91cd\u5927|\u6f0f\u6d1e|\u53d1\u5e03|\u4e34\u5e8a", re.I)
+
+LOW_VALUE = re.compile(r"APOD:|image of the day|high school.*challenge|middle school.*challenge|named.*auditor|named.*top university|innovation fellow|hall of fame|showroom|new exhibition|podcast:|early careers|humanist lens|finding purpose|luxury yacht", re.I)
+
+def editorial_candidate(article):
+    return not LOW_VALUE.search(article.title)
+
+def policy(root):
+    path = root / "config" / "supply.json"
+    value = {**DEFAULT, **(json.loads(path.read_text(encoding="utf-8")) if path.exists() else {})}
+    if not 10 <= value["minimum"] <= value["target"] <= value["maximum"] <= 18:
+        raise ValueError("invalid daily supply limits")
+    return value
+
+def normalized_url(url):
+    return url.split("#", 1)[0].rstrip("/")
+
+def same_event(a, b):
+    # Different explicit versions are a material update; mere headline rewording is not.
+    versions = lambda s: set(re.findall(r"\bv?(\d+\.\d+)(?:\.\d+)?\b", s.lower()))
+    if versions(a) and versions(b) and versions(a) != versions(b):
+        return False
+    clean = lambda s: re.sub(r"[^\w]", "", s.casefold())
+    return SequenceMatcher(None, clean(a), clean(b)).ratio() >= .78
+
+def history(site_root, now):
+    items = []
+    for path in (site_root / "data/daily/ai").glob("*.json"):
+        report = json.loads(path.read_text(encoding="utf-8"))
+        if report.get("report_date", "9999") < now.astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat():
+            items.extend(report.get("items", []))
+    return items
+
+def deep_read(article):
+    return bool(DEEP.search(article.title)) and len(article.clean_text) >= 1500 and article.source_tier <= 2
+
+def level(article, now):
+    age = (now - datetime.fromisoformat(article.published_at)).total_seconds() / 3600
+    if age < -1/6: return None
+    if age <= 24: return 1 if article.source_tier <= 2 else 2
+    if age <= 72: return 3
+    if age <= 168 and deep_read(article): return 4
+    return None
+
+def select(articles, now, rules, past=(), enrichments=None, limit=None):
+    enrichments = enrichments or {}
+    urls = {normalized_url(x["original_url"]) for x in past}
+    titles = [x.get("title_original", x.get("title_en", "")) for x in past]
+    pool = []
+    for a in articles:
+        stage = level(a, now)
+        if not editorial_candidate(a) or not stage or a.source_tier > 3 or a.verification_status != "source_verified": continue
+        if a.fingerprint in {x.get("fingerprint") for x in past} or normalized_url(a.original_url) in urls or any(same_event(a.title, t) for t in titles if t): continue
+        e = enrichments.get(a.id)
+        importance = e.importance_score if e else 60 + 15 * bool(IMPACT.search(a.title))
+        if e and importance < 60: continue
+        relevance = 100 if a.category in rules["personal_categories"] else 0
+        score = .6 * importance + .2 * {1:100, 2:85, 3:65}[a.source_tier] + 10 + .1 * relevance
+        pool.append((a, stage, score, importance))
+    selected = []
+    seen_fp = set()
+    seen_url = set()
+    stats = []
+    deferred = []
+    cap = min(limit or rules["maximum"], rules["target"])
+    if sum(x[3] >= rules["major_score"] for x in pool if x[1] <= 2) >= 10:
+        cap = min(limit or rules["maximum"], rules["maximum"])
+    for stage in (1,2,3,4):
+        candidates = [x for x in pool if x[1] == stage]
+        while candidates and len(selected) < cap:
+            categories = Counter(x[0].category for x in selected)
+            sources = Counter(x[0].source for x in selected)
+            explore = sum(x[0].category not in rules["personal_categories"] for x in selected)
+            def ordering(x):
+                a, _, score, importance = x
+                diversity = (20 if explore < rules["explore_minimum"] and a.category not in rules["personal_categories"] else 0)
+                penalty = 0 if importance >= rules["major_score"] else (25 if categories[a.category] >= max(1,int(cap*rules["category_share"])) else 0) + (25 if a.source_tier > 1 and sources[a.source] >= rules["media_limit"] else 0)
+                return (importance >= rules["major_score"], int(importance // 10), score + diversity - penalty, a.published_at, a.id)
+            x = max(candidates, key=ordering); candidates.remove(x)
+            a = x[0]
+            if a.fingerprint in seen_fp or normalized_url(a.original_url) in seen_url or any(same_event(a.title,b[0].title) for b in selected): continue
+            if x[3] < rules["major_score"] and ((a.source_tier > 1 and sources[a.source] >= rules["media_limit"]) or categories[a.category] >= max(1, int(cap * rules["category_share"]))):
+                deferred.append(x)
+                continue
+            selected.append(x); seen_fp.add(a.fingerprint); seen_url.add(normalized_url(a.original_url))
+        stats.append({"level":stage,"eligible":sum(x[1]==stage for x in pool),"selected_total":len(selected)})
+        if len(selected) >= rules["target"]: break
+    # Diversity is soft only when no qualified alternative exists; expose the exception.
+    diversity_exception = False
+    for x in sorted(deferred, key=lambda x:x[2], reverse=True):
+        if len(selected) >= min(cap, rules["minimum"]): break
+        a = x[0]
+        if a.fingerprint in seen_fp or normalized_url(a.original_url) in seen_url or any(same_event(a.title,b[0].title) for b in selected): continue
+        selected.append(x); seen_fp.add(a.fingerprint); seen_url.add(normalized_url(a.original_url))
+        diversity_exception = True
+    metadata = {}
+    for a, stage, score, importance in selected:
+        section = "deep_read" if deep_read(a) else "major_tech" if importance >= rules["major_score"] else "for_you" if a.category in rules["personal_categories"] else "explore"
+        metadata[a.id] = {"supply_level":stage,"section":section,"ranking_score":round(score,2),
+                          "content_type":"deep_read" if deep_read(a) else "news", "catch_up":stage==3,
+                          "fingerprint":a.fingerprint, "article_id":a.id,
+                          "source_region":a.source_region,"source_tier":a.source_tier}
+    return [x[0] for x in selected], metadata, {"diversity_exception":diversity_exception,"levels":stats,"selected":len(selected),"shortfall":max(0,rules["minimum"]-len(selected)),"explore_count":sum(a.category not in rules["personal_categories"] for a,*_ in selected),"sources":len({a.source for a,*_ in selected}),"categories":dict(Counter(a.category for a,*_ in selected)),"deep_read_candidates":sum(deep_read(a) for a, *_ in pool),"score_mode":"semantic importance when cached; heuristic preselection otherwise"}

@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $taskName = 'MarieSpace Tech Daily Daily'
 $root = Split-Path -Parent $PSScriptRoot
-$runner = Join-Path $root 'run_daily_delivery.py'
+$runner = Join-Path $root 'deploy\run-phase6-task.cmd'
 
 if ($Remove) {
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
@@ -14,7 +14,7 @@ if ($Remove) {
 }
 
 if (-not (Test-Path -LiteralPath $runner)) { throw 'Phase 6 runner is missing.' }
-$action = New-ScheduledTaskAction -Execute 'py.exe' -Argument "-3 `"$runner`" --scheduled" -WorkingDirectory $root
+$action = New-ScheduledTaskAction -Execute $env:ComSpec -Argument "/d /c `"`"$runner`"`"" -WorkingDirectory $root
 $trigger = New-ScheduledTaskTrigger -Daily -At 08:00
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew
 $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings -Description 'MarieSpace Tech Daily. Runs daily at 08:00 Asia/Shanghai; sends only after formal URL verification.'

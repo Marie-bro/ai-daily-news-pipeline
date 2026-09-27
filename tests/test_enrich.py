@@ -21,6 +21,13 @@ def article() -> Article:
 
 def model_item(article_id: str = "article-1") -> dict[str, object]:
     return {
+        "fact_schema": {
+            "article_id": article_id, "category": "ai",
+            "core_facts": [
+                {"id": "f1", "type": "technology", "value": "AI", "rendered_in": ["title", "what_happened"], "english_forms": ["AI"], "chinese_forms": ["AI"]},
+            ],
+            "key_entities": ["AI"], "dates": [], "numbers": [], "versions": [], "products": [], "companies": [], "technologies": ["AI"], "scope": "", "limitations": [], "importance_reasons": [],
+        },
         "id": article_id, "category": "ai", "title_en": "An AI release", "title_cn": "一项 AI 发布",
         "title_original": "ignored", "source": "ignored", "published_at": "ignored",
         "original_url": "https://invalid.example", "what_happened_en": "The company released a new AI capability.",
@@ -165,11 +172,11 @@ class EnrichmentTests(unittest.TestCase):
         self.assertNotIn("translation", valid.to_dict())
         self.assertNotIn("summary_en", valid.to_dict())
 
-    def test_bilingual_versions_and_acronyms_must_match(self):
+    def test_bilingual_hard_facts_must_match(self):
         inconsistent = model_item()
         inconsistent["what_happened_en"] = "The v4.1 AI model was released."
         inconsistent["what_happened"] = "该模型已经发布。"
-        with self.assertRaisesRegex(EnrichmentError, "inconsistent bilingual literals"):
+        with self.assertRaisesRegex(EnrichmentError, "failed bilingual validation"):
             _validated_enrichments({"items": [inconsistent]}, [article()], "model", article().created_at)
 
     def test_generated_blocked_content_is_rejected_before_storage(self):

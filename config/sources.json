@@ -200,6 +200,113 @@
     "tier": 1,
     "language": "en",
     "fetch_method": "html_index",
+    "health_status": "active",
+    "article_path_pattern": "^/news/[^/]+/[^/]+/?$"
+  },
+  {
+    "id": "mit-news",
+    "name": "MIT News",
+    "source_type": "official_newsroom",
+    "adapter": "rss",
+    "enabled": true,
+    "conditional_requests": true,
+    "url": "https://news.mit.edu/rss/feed",
+    "allow_hosts": [
+      "news.mit.edu"
+    ],
+    "priority": 2,
+    "region": "US",
+    "category": [
+      "science"
+    ],
+    "tier": 1,
+    "language": "en",
+    "fetch_method": "rss",
+    "health_status": "active"
+  },
+  {
+    "id": "nasa-news",
+    "name": "NASA",
+    "source_type": "official_newsroom",
+    "adapter": "rss",
+    "enabled": true,
+    "conditional_requests": true,
+    "url": "https://www.nasa.gov/feed/",
+    "allow_hosts": [
+      "nasa.gov"
+    ],
+    "priority": 2,
+    "region": "US",
+    "category": [
+      "space"
+    ],
+    "tier": 1,
+    "language": "en",
+    "fetch_method": "rss",
+    "health_status": "active"
+  },
+  {
+    "id": "esa-science",
+    "name": "ESA",
+    "source_type": "official_newsroom",
+    "adapter": "rss",
+    "enabled": true,
+    "conditional_requests": true,
+    "url": "https://www.esa.int/rssfeed/Our_Activities/Space_Science",
+    "allow_hosts": [
+      "esa.int"
+    ],
+    "priority": 2,
+    "region": "EU",
+    "category": [
+      "space"
+    ],
+    "tier": 1,
+    "language": "en",
+    "fetch_method": "rss",
+    "health_status": "active"
+  },
+  {
+    "id": "cas-research",
+    "name": "Chinese Academy of Sciences",
+    "source_type": "official_newsroom",
+    "adapter": "html_index",
+    "enabled": true,
+    "conditional_requests": true,
+    "url": "https://www.cas.cn/syky/",
+    "allow_hosts": [
+      "cas.cn"
+    ],
+    "article_path_pattern": "/t\\d{8}_\\d+\\.shtml$",
+    "priority": 2,
+    "region": "CN",
+    "category": [
+      "science"
+    ],
+    "tier": 1,
+    "language": "zh",
+    "fetch_method": "html_index",
+    "health_status": "active"
+  },
+  {
+    "id": "ithome-news",
+    "name": "IT之家",
+    "source_type": "professional_media",
+    "adapter": "rss",
+    "enabled": true,
+    "conditional_requests": true,
+    "url": "https://www.ithome.com/rss/",
+    "allow_hosts": [
+      "ithome.com"
+    ],
+    "priority": 10,
+    "region": "CN",
+    "category": [
+      "other_tech"
+    ],
+    "tier": 3,
+    "language": "zh",
+    "fetch_method": "rss",
     "health_status": "active"
   }
 ]

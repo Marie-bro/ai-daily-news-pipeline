@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -35,14 +36,14 @@ def _language(text: str) -> str:
 
 
 def _collapse_release_bursts(articles: list[Article]) -> list[Article]:
-    """Keep the newest release from a same-day SDK/repository version burst."""
+    """Collapse same-day patch bursts; distinct major/minor versions remain eligible."""
     selected: dict[tuple[str, str, str], Article] = {}
     others: list[Article] = []
     for article in articles:
         if article.source_type != "official_changelog":
             others.append(article)
             continue
-        key = (article.source, article.published_at[:10], "release")
+        key = (article.source, article.published_at[:10], re.sub(r"(v?\d+\.\d+)\.\d+", r"\1", article.title.casefold()))
         current = selected.get(key)
         if current is None or article.published_at > current.published_at:
             selected[key] = article
@@ -94,7 +95,7 @@ def check_sources(root: Path) -> list[dict[str, object]]:
     return results
 
 
-def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minimum: int = 8, maximum: int = 15) -> RunResult:
+def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minimum: int = 5, maximum: int = 200) -> RunResult:
     now = (now or datetime.now(UTC)).astimezone(UTC)
     sources: list[SourceDefinition] = load_sources(root / "config" / "sources.json")
     sources_by_id = {source.source_id: source for source in sources}
@@ -128,7 +129,7 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
     )
     articles: list[Article] = []
     window_hours = 24
-    for candidate_window in (24, 72):
+    for candidate_window in (168,):
         # Feed timestamps let us discard stale entries before downloading article pages.
         eligible_by_source: dict[str, list[SourceItem]] = {}
         for item in ordered:
@@ -136,7 +137,7 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
                 continue
             bucket = eligible_by_source.setdefault(item.source_id, [])
             # HTML indexes mix article cards with navigation; scan a bounded set of recent links.
-            if len(bucket) < 8:
+            if len(bucket) < 20:
                 bucket.append(item)
         eligible = [item for bucket in eligible_by_source.values() for item in bucket]
 
@@ -155,7 +156,7 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
                     articles.append(article)
         articles = _collapse_release_bursts(articles)[:maximum]
         window_hours = candidate_window
-        if len(articles) >= minimum or candidate_window == 72:
+        if len(articles) >= minimum or candidate_window == 168:
             break
     inserted = 0
     if not dry_run:
