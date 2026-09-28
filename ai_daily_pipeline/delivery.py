@@ -304,7 +304,7 @@ def run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool 
         return DeliveryResult(current.date().isoformat(), None, "skipped", str(details["skipped_reason"]), None, None, 0)
 
     try:
-        collection = run_collection(pipeline_root)
+        collection = run_collection(pipeline_root, dry_run=False)
     except Exception as exc:
         return record_failure(exc, "collection")
     try:

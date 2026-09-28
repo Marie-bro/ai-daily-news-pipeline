@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import runpy
 import sqlite3
+import sys
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,12 +15,48 @@ from zoneinfo import ZoneInfo
 from ai_daily_pipeline.deepseek import DeepSeekError
 from ai_daily_pipeline.diagnostics import mark_failure
 from ai_daily_pipeline.delivery import run_scheduled_delivery
+from ai_daily_pipeline.pipeline import run_collection
 
 
 NOW = datetime(2026, 9, 28, 8, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
 
 
 class ScheduledFailureObservabilityTests(unittest.TestCase):
+    def test_scheduled_entry_binds_required_collection_arguments_without_sending(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("ai_daily_pipeline.delivery.run_collection", autospec=run_collection) as collect, \
+                 patch("ai_daily_pipeline.delivery.run_enrichment") as enrich, \
+                 patch("ai_daily_pipeline.delivery.publish_latest_report") as publish, \
+                 patch("ai_daily_pipeline.delivery.send_existing_report") as sender:
+                collect.return_value = SimpleNamespace(accepted=0, inserted=0)
+                enrich.return_value = SimpleNamespace(candidates=0, saved=0, output_path=None)
+                result = run_scheduled_delivery(root, root / "site", now=NOW)
+            collect.assert_called_once_with(root, dry_run=False)
+            enrich.assert_called_once_with(root)
+            publish.assert_not_called()
+            sender.assert_not_called()
+            self.assertEqual(result.reason, "no_qualified_tech_news")
+
+    def test_scheduled_cli_reaches_collection_without_network_or_send(self):
+        script = Path(__file__).resolve().parents[1] / "run_daily_delivery.py"
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(sys, "argv", [str(script), "--scheduled"]), \
+                 patch("ai_daily_pipeline.delivery.run_scheduled_delivery",
+                       side_effect=lambda _root, _site: run_scheduled_delivery(root, root / "site", now=NOW)) as scheduler, \
+                 patch("ai_daily_pipeline.delivery.run_collection", autospec=run_collection) as collect, \
+                 patch("ai_daily_pipeline.delivery.run_enrichment") as enrich, \
+                 patch("ai_daily_pipeline.delivery.publish_latest_report") as publish, \
+                 patch("ai_daily_pipeline.delivery.send_existing_report") as sender:
+                collect.return_value = SimpleNamespace(accepted=0, inserted=0)
+                enrich.return_value = SimpleNamespace(candidates=0, saved=0, output_path=None)
+                runpy.run_path(str(script), run_name="__main__")
+            scheduler.assert_called_once()
+            collect.assert_called_once_with(root, dry_run=False)
+            publish.assert_not_called()
+            sender.assert_not_called()
+
     def _run(self, collection_error=None, enrichment_error=None):
         with TemporaryDirectory() as directory:
             root = Path(directory)
