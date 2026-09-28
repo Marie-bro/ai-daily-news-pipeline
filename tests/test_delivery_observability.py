@@ -30,7 +30,7 @@ class ScheduledFailureObservabilityTests(unittest.TestCase):
                  patch("ai_daily_pipeline.delivery.publish_latest_report") as publish, \
                  patch("ai_daily_pipeline.delivery.send_existing_report") as sender:
                 collect.return_value = SimpleNamespace(accepted=0, inserted=0)
-                enrich.return_value = SimpleNamespace(candidates=0, saved=0, output_path=None)
+                enrich.return_value = SimpleNamespace(candidates=0, saved=0, output_path=None, token_budget_status="normal")
                 result = run_scheduled_delivery(root, root / "site", now=NOW)
             collect.assert_called_once_with(root, dry_run=False)
             enrich.assert_called_once_with(root)
@@ -50,7 +50,7 @@ class ScheduledFailureObservabilityTests(unittest.TestCase):
                  patch("ai_daily_pipeline.delivery.publish_latest_report") as publish, \
                  patch("ai_daily_pipeline.delivery.send_existing_report") as sender:
                 collect.return_value = SimpleNamespace(accepted=0, inserted=0)
-                enrich.return_value = SimpleNamespace(candidates=0, saved=0, output_path=None)
+                enrich.return_value = SimpleNamespace(candidates=0, saved=0, output_path=None, token_budget_status="normal")
                 runpy.run_path(str(script), run_name="__main__")
             scheduler.assert_called_once()
             collect.assert_called_once_with(root, dry_run=False)
@@ -104,3 +104,19 @@ class ScheduledFailureObservabilityTests(unittest.TestCase):
                     self.assertEqual(record["batch_index"], 2)
                     self.assertEqual(record["batch_article_ids"], ["article-1"])
                     self.assertEqual(record["token_usage"], {"total_tokens": 12})
+
+    def test_budget_exhaustion_before_minimum_never_publishes_or_sends(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("ai_daily_pipeline.delivery.run_collection", autospec=run_collection) as collect, \
+                 patch("ai_daily_pipeline.delivery.run_enrichment") as enrich, \
+                 patch("ai_daily_pipeline.delivery.publish_latest_report") as publish, \
+                 patch("ai_daily_pipeline.delivery.send_existing_report") as sender:
+                collect.return_value = SimpleNamespace(accepted=9, inserted=9)
+                enrich.return_value = SimpleNamespace(candidates=9, saved=0, output_path=None,
+                                                     token_budget_status="exhausted_before_minimum")
+                result = run_scheduled_delivery(root, root / "site", now=NOW)
+            self.assertEqual(result.status, "daily_failed")
+            self.assertEqual(result.reason, "token_budget_exhausted")
+            publish.assert_not_called()
+            sender.assert_not_called()

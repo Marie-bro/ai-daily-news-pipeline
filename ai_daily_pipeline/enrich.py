@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from math import ceil
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -44,6 +45,8 @@ class EnrichmentResult:
     model: str | None
     usage: dict[str, object]
     output_path: Path | None
+    token_budget_status: str = "normal"
+    minimum_not_met_reason: str | None = None
 
 
 def _positive_int(name: str, default: int) -> int:
@@ -271,6 +274,31 @@ def _usage_total(rows: list[dict[str, object]]) -> dict[str, object]:
     return total
 
 
+@dataclass(frozen=True)
+class TokenEstimate:
+    input_tokens: int
+    output_tokens: int
+    safety_tokens: int
+
+    @property
+    def required_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens + self.safety_tokens
+
+
+def _estimate_request_tokens(system: str, prompt: str, output_limit: int, observed_input_ratio: float = 0) -> TokenEstimate:
+    characters = len(system) + len(prompt)
+    # The existing character estimator is the floor. A conservative baseline and actual
+    # input usage from earlier batches protect the remaining daily budget.
+    estimated_input = max((characters + 2) // 3, ceil(characters / 2), ceil(characters * observed_input_ratio))
+    return TokenEstimate(estimated_input, output_limit, max(256, ceil(estimated_input * .1)))
+
+
+def _budget_status(accepted_count: int, token_used: int, token_budget: int, next_required: int, minimum: int) -> str:
+    if token_used + next_required <= token_budget:
+        return "normal"
+    return "graceful_stop" if accepted_count >= minimum else "exhausted_before_minimum"
+
+
 def _ready_selection(inventory: list[Article], all_enriched: dict[str, Enrichment], now: datetime, rules: dict[str, object], past: list[dict[str, object]], limit: int) -> tuple[list[Enrichment], dict[str, dict[str, object]], dict[str, object]]:
     ready = [replace(article, category=all_enriched[article.id].category) for article in inventory if article.id in all_enriched]
     final, metadata, diagnostics = select(ready, now, rules, past, all_enriched, limit=limit)
@@ -292,7 +320,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
     character_limit = _positive_int("MAX_NEWS_INPUT_CHARS_PER_ARTICLE", 4_000)
     max_output_tokens = _positive_int("MAX_NEWS_OUTPUT_TOKENS", 7_200)
     repair_output_tokens = _positive_int("MAX_BILINGUAL_REPAIR_OUTPUT_TOKENS", 900)
-    max_daily_tokens = _positive_int("MAX_DAILY_TOKENS", 40_000)
+    max_daily_tokens = min(_positive_int("MAX_DAILY_TOKENS", 40_000), 40_000)
     now = (now or datetime.now(UTC)).astimezone(UTC)
     data_dir = root / "data"
     output_path = data_dir / "latest-enrichment.json"
@@ -329,30 +357,62 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
         }
         client = None
         batch_counter = 0
+        batches_completed = 0
+        observed_input_ratio = 0.0
+        token_budget_status = "normal"
+        stopped_reason: str | None = None
+        publishable, metadata, diagnostics = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit)
+        budget_metadata: dict[str, object] = {}
         active_batch_context: dict[str, object] = {}
         last_failure: dict[str, object] | None = None
+
+        def update_budget_metadata(estimate: TokenEstimate | None = None) -> None:
+            used = store.daily_total_tokens(now.date().isoformat())
+            budget_metadata.update({
+                "token_budget_status": token_budget_status,
+                "token_budget": max_daily_tokens,
+                "token_used": used,
+                "token_remaining": max(0, max_daily_tokens - used),
+                "batches_completed": batches_completed,
+                "accepted_count": len(publishable),
+                "target_count": rules["target"],
+                "stopped_reason": stopped_reason,
+            })
+            if estimate is not None or token_budget_status == "normal":
+                budget_metadata.update({
+                    "next_batch_estimated_input_tokens": estimate.input_tokens if estimate else None,
+                    "next_batch_estimated_output_tokens": estimate.output_tokens if estimate else None,
+                    "next_batch_required_tokens": estimate.required_tokens if estimate else None,
+                })
+
+        update_budget_metadata()
 
         def persist_audit() -> None:
             audit_path.write_text(json.dumps({
                 "generated_at": now.isoformat(), "task": TASK_NAME, "model": model, "summary": stats,
                 "entries": audit_entries, "usage": _usage_total(usages) if usages else {},
-                "failure": last_failure,
+                "failure": last_failure, "token_budget": budget_metadata,
             }, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        def process_batch_body(articles: list[Article], *, fallback: bool) -> None:
-            nonlocal model, character_limit, client
+        def process_batch_body(articles: list[Article], *, fallback: bool) -> bool:
+            nonlocal model, character_limit, client, observed_input_ratio, token_budget_status, stopped_reason
             if not articles:
-                return
+                return True
             while True:
                 batch_prompt = _candidate_payload(articles, character_limit)
                 batch_output_tokens = min(max_output_tokens, max(1_800, (max_output_tokens * len(articles) + model_batch_size - 1) // model_batch_size))
-                estimated = (len(NEWS_SYSTEM_PROMPT) + len(batch_prompt) + 2) // 3 + batch_output_tokens
-                if store.daily_total_tokens(now.date().isoformat()) + estimated <= max_daily_tokens or character_limit <= 1200:
+                estimate = _estimate_request_tokens(NEWS_SYSTEM_PROMPT, batch_prompt, batch_output_tokens, observed_input_ratio)
+                current_total = store.daily_total_tokens(now.date().isoformat())
+                status = _budget_status(len(publishable), current_total, max_daily_tokens, estimate.required_tokens, rules["minimum"])
+                if status == "normal" or character_limit <= 1200:
                     break
                 character_limit = max(1200, character_limit - 200)
-            current_total = store.daily_total_tokens(now.date().isoformat())
-            if current_total + estimated > max_daily_tokens:
-                raise EnrichmentError(f"Daily token guard: {current_total} recorded plus the bilingual batch estimate exceeds {max_daily_tokens}")
+            update_budget_metadata(estimate)
+            if status != "normal":
+                token_budget_status = status
+                stopped_reason = "token_budget_insufficient_for_next_batch"
+                update_budget_metadata(estimate)
+                return False
             if client is None:
                 client = DeepSeekClient()
             try:
@@ -365,6 +425,9 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                     store.commit()
                 raise
             model = model_name
+            actual_prompt_tokens = batch_usage.get("prompt_tokens")
+            if isinstance(actual_prompt_tokens, int) and actual_prompt_tokens > 0:
+                observed_input_ratio = max(observed_input_ratio, actual_prompt_tokens / (len(NEWS_SYSTEM_PROMPT) + len(batch_prompt)))
             active_batch_context["model"] = model_name
             active_batch_context["token_usage"] = _usage_total([batch_usage])
             usages.append(batch_usage)
@@ -399,8 +462,9 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                 # One item receives at most one repair call, restricted to the failed field(s).
                 active_batch_context["local_repair_triggered"] = True
                 repair_prompt = _repair_prompt(result.article, result.raw_item, issue, character_limit)
-                estimated_repair = len(REPAIR_SYSTEM_PROMPT) + len(repair_prompt) + repair_output_tokens
-                if store.daily_total_tokens(now.date().isoformat()) + estimated_repair > max_daily_tokens:
+                repair_estimate = _estimate_request_tokens(REPAIR_SYSTEM_PROMPT, repair_prompt, repair_output_tokens, observed_input_ratio)
+                if _budget_status(len(publishable), store.daily_total_tokens(now.date().isoformat()), max_daily_tokens,
+                                  repair_estimate.required_tokens, rules["minimum"]) != "normal":
                     audit_entries.append({**_audit_entry(result), "repair_skipped": "daily token guard"})
                     continue
                 try:
@@ -427,19 +491,25 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                     stats["fallback_added"] += 1
                 audit_entries.append({**_audit_entry(repaired, repaired=True), "initial_reject_stage": issue.stage, "initial_reject_reason": issue.reason})
             store.commit()
-            persist_audit()
+            return True
 
-        def process_batch(articles: list[Article], *, fallback: bool) -> None:
-            nonlocal batch_counter, active_batch_context, last_failure
+        def process_batch(articles: list[Article], *, fallback: bool) -> bool:
+            nonlocal batch_counter, batches_completed, active_batch_context, last_failure, publishable, metadata, diagnostics
             if not articles:
-                return
+                return True
             batch_counter += 1
             active_batch_context = {"batch_index": batch_counter, "batch_article_ids": [article.id for article in articles],
                                     "model": None, "request_id": None, "token_usage": None,
                                     "local_repair_triggered": False, "fallback": fallback}
             usage_start = len(usages)
             try:
-                process_batch_body(articles, fallback=fallback)
+                completed = process_batch_body(articles, fallback=fallback)
+                if completed:
+                    batches_completed += 1
+                    publishable, metadata, diagnostics = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit)
+                    update_budget_metadata()
+                persist_audit()
+                return completed
             except Exception as exc:
                 if len(usages) > usage_start:
                     active_batch_context["token_usage"] = _usage_total(usages[usage_start:])
@@ -453,10 +523,10 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                 raise
 
         for offset in range(0, len(initial_articles), model_batch_size):
-            process_batch(initial_articles[offset:offset + model_batch_size], fallback=False)
-        publishable, metadata, diagnostics = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit)
+            if not process_batch(initial_articles[offset:offset + model_batch_size], fallback=False):
+                break
         # Work toward the target using untouched real candidates; quality gates and the hard maximum remain unchanged.
-        while len(publishable) < rules["target"]:
+        while token_budget_status == "normal" and len(publishable) < rules["target"]:
             fallback_history = _record_attempted_as_history(past, attempted)
             fallback_chosen, _, _ = select(inventory, now, rules, fallback_history, cached, limit=daily_limit)
             fallback_articles = [article for article in fallback_chosen if article.id not in all_enriched and article.id not in {item.id for item in attempted}]
@@ -465,26 +535,32 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
             needed = max(1, rules["target"] - len(publishable))
             batch = fallback_articles[:min(model_batch_size, max(3, needed * 2))]
             attempted.extend(batch)
-            process_batch(batch, fallback=True)
-            publishable, metadata, diagnostics = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit)
+            if not process_batch(batch, fallback=True):
+                break
 
         stats["final_count"] = len(publishable)
         stats["minimum_met"] = len(publishable) >= rules["minimum"]
         diagnostics.update(stats)
+        update_budget_metadata()
+        diagnostics.update(budget_metadata)
         diagnostics["selected"] = len(publishable)
         diagnostics["shortfall"] = max(0, rules["minimum"] - len(publishable))
-        if not stats["minimum_met"]:
+        if token_budget_status == "exhausted_before_minimum":
+            diagnostics["daily_status"] = "daily_failed"
+            diagnostics["minimum_not_met_reason"] = "token_budget_exhausted"
+        elif not stats["minimum_met"]:
             diagnostics["minimum_not_met_reason"] = "all eligible, source-verified candidates were exhausted after fact-schema validation"
         total_usage = _usage_total(usages) if usages else {}
         persist_audit()
         (data_dir / "supply-status.json").write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
-        if not publishable:
-            return EnrichmentResult(len(attempted), 0, model, total_usage, None)
+        if not publishable or token_budget_status == "exhausted_before_minimum":
+            return EnrichmentResult(len(attempted), 0, model, total_usage, None, token_budget_status,
+                                    diagnostics.get("minimum_not_met_reason"))
         output_path.write_text(json.dumps({
             "schema_version": 3, "generated_at": now.isoformat(), "task": TASK_NAME, "model": model, "usage": total_usage,
             "supply": diagnostics,
             "items": [{**enrichment.to_dict(), **metadata[enrichment.article_id]} for enrichment in publishable],
         }, ensure_ascii=False, indent=2), encoding="utf-8")
-        return EnrichmentResult(len(attempted), len(publishable), model, total_usage, output_path)
+        return EnrichmentResult(len(attempted), len(publishable), model, total_usage, output_path, token_budget_status)
     finally:
         store.close()

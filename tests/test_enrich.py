@@ -201,6 +201,10 @@ class EnrichmentTests(unittest.TestCase):
             store.add(article())
             store.close()
             with patch.dict("os.environ", {"MAX_DAILY_TOKENS": "100"}), patch("ai_daily_pipeline.enrich.DeepSeekClient") as client:
-                with self.assertRaisesRegex(EnrichmentError, "Daily token guard"):
-                    run_enrichment(root, now=datetime(2026, 9, 14, tzinfo=UTC))
+                result = run_enrichment(root, now=datetime(2026, 9, 14, tzinfo=UTC))
             client.assert_not_called()
+            self.assertEqual(result.token_budget_status, "exhausted_before_minimum")
+            self.assertEqual(result.minimum_not_met_reason, "token_budget_exhausted")
+            self.assertIsNone(result.output_path)
+            status = json.loads((root / "data" / "supply-status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["daily_status"], "daily_failed")

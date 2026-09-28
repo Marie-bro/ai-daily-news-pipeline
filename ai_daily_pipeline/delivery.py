@@ -312,12 +312,15 @@ def run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool 
     except Exception as exc:
         return record_failure(exc, "enrichment", collection.accepted)
     if not enrichment.output_path or enrichment.saved <= 0:
+        budget_failed = enrichment.token_budget_status == "exhausted_before_minimum"
+        reason = "token_budget_exhausted" if budget_failed else "no_qualified_tech_news"
         record = {"run_date": current.date().isoformat(), "start_time": current.isoformat(), "end_time": _now(now).isoformat(),
                   "candidate_count": enrichment.candidates, "selected_count": 0, "report_generated": False, "report_url": None,
                   "url_reachable": False, "feishu_send_attempted": False, "feishu_send_result": None, "message_id": None,
-                  "skipped_reason": "no_qualified_tech_news", "retry_count": 0, "collection_inserted": collection.inserted}
+                  "skipped_reason": reason, "retry_count": 0, "collection_inserted": collection.inserted,
+                  "token_budget_status": enrichment.token_budget_status}
         append_run_log(pipeline_root, record)
-        return DeliveryResult(current.date().isoformat(), None, "skipped", "no_qualified_tech_news", None, None, 0)
+        return DeliveryResult(current.date().isoformat(), None, "daily_failed" if budget_failed else "skipped", reason, None, None, 0)
     try:
         report_path = publish_latest_report(pipeline_root, site_root)
         deploy_site_data(site_root, report_path)
