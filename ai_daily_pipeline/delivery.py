@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from .enrich import run_enrichment
+from .diagnostics import failure_details
 from .pipeline import run_collection
 from .publish import PublishError, publish_latest_report
 from .store import ArticleStore
@@ -293,15 +294,23 @@ def deploy_site_data(site_root: Path, report_path: Path) -> None:
 
 def run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool = False, now: datetime | None = None) -> DeliveryResult:
     current = _now(now)
+    def record_failure(exc: Exception, default_stage: str, candidate_count: int = 0) -> DeliveryResult:
+        details = failure_details(exc, default_stage)
+        append_run_log(pipeline_root, {"run_date": current.date().isoformat(), "start_time": current.isoformat(),
+                                      "end_time": _now(now).isoformat(), "candidate_count": candidate_count,
+                                      "selected_count": 0, "report_generated": False, "report_url": None,
+                                      "url_reachable": False, "feishu_send_attempted": False, "feishu_send_result": None,
+                                      "message_id": None, "retry_count": 0, **details})
+        return DeliveryResult(current.date().isoformat(), None, "skipped", str(details["skipped_reason"]), None, None, 0)
+
     try:
         collection = run_collection(pipeline_root)
+    except Exception as exc:
+        return record_failure(exc, "collection")
+    try:
         enrichment = run_enrichment(pipeline_root)
-    except Exception:
-        append_run_log(pipeline_root, {"run_date": current.date().isoformat(), "start_time": current.isoformat(), "end_time": _now(now).isoformat(),
-                                      "candidate_count": 0, "selected_count": 0, "report_generated": False, "report_url": None,
-                                      "url_reachable": False, "feishu_send_attempted": False, "feishu_send_result": None, "message_id": None,
-                                      "skipped_reason": "collection_or_enrichment_failed", "retry_count": 0})
-        return DeliveryResult(current.date().isoformat(), None, "skipped", "collection_or_enrichment_failed", None, None, 0)
+    except Exception as exc:
+        return record_failure(exc, "enrichment", collection.accepted)
     if not enrichment.output_path or enrichment.saved <= 0:
         record = {"run_date": current.date().isoformat(), "start_time": current.isoformat(), "end_time": _now(now).isoformat(),
                   "candidate_count": enrichment.candidates, "selected_count": 0, "report_generated": False, "report_url": None,

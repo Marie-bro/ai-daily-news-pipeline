@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .extract import extract_article
+from .diagnostics import failure_details, mark_failure
 from .models import Article, SourceItem
 from .sources import RADAR_TERMS, BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS, SourceDefinition, classify_radar, collect_source, fetch, load_sources
 from .store import ArticleStore
@@ -23,6 +24,8 @@ class RunResult:
     errors: tuple[str, ...]
     articles: tuple[Article, ...]
     source_health: tuple[dict[str, object], ...] = ()
+    source_errors: tuple[dict[str, object], ...] = ()
+    normalization_errors: tuple[dict[str, object], ...] = ()
 
 
 def _in_window(published_at: datetime, now: datetime, hours: int) -> bool:
@@ -106,6 +109,8 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
     errors: list[str] = []
     source_items: list[SourceItem] = []
     source_health: list[dict[str, object]] = []
+    source_errors: list[dict[str, object]] = []
+    normalization_errors: list[dict[str, object]] = []
     cache = ArticleStore(root / "data" / "ai_daily.sqlite3") if not dry_run else None
     try:
         for source in sources:
@@ -114,6 +119,7 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
                 source_items.extend(result.items)
                 latest_success = cache.record_source_health(source.source_id, result.status, now.isoformat(), len(result.items)) if cache else (now.isoformat() if result.status == "ok" else None)
                 source_health.append({"source_id": source.source_id, "status": result.status,
+                                      "fetch_method": source.fetch_method,
                                       "region": source.region, "tier": source.tier, "source_role": source.source_role,
                                       "channel": list(source.channels), "configured_health": source.health_status,
                                       "items": len(result.items), "not_modified": result.not_modified,
@@ -122,8 +128,14 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
             except Exception as exc:  # An unavailable source must not invent replacements.
                 message = f"{source.source_id}: {type(exc).__name__}: {exc}"
                 errors.append(message)
+                detail = failure_details(exc, "collection")
+                source_errors.append({"source_id": source.source_id, "fetch_method": source.fetch_method,
+                                      "http_status": detail["http_status"], "error_type": detail["error_type"],
+                                      "error_kind": detail["error_kind"], "error_summary": detail["error_summary"],
+                                      "isolated": True})
                 latest_success = cache.record_source_health(source.source_id, "error", now.isoformat(), 0, message) if cache else None
                 source_health.append({"source_id": source.source_id, "status": "error", "items": 0,
+                                      "fetch_method": source.fetch_method,
                                       "region": source.region, "tier": source.tier, "source_role": source.source_role,
                                       "channel": list(source.channels), "configured_health": source.health_status,
                                       "not_modified": False, "used_conditional_request": False,
@@ -150,20 +162,28 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
                 bucket.append(item)
         eligible = [item for bucket in eligible_by_source.values() for item in bucket]
 
-        def normalize(item: SourceItem) -> tuple[SourceItem, Article | None, str | None]:
+        def normalize(item: SourceItem) -> tuple[SourceItem, Article | None, str | None, dict[str, object] | None]:
             try:
-                return item, _candidate_to_article(item, now, sources_by_id[item.source_id]), None
+                return item, _candidate_to_article(item, now, sources_by_id[item.source_id]), None, None
             except Exception as exc:
-                return item, None, f"{item.url}: {type(exc).__name__}: {exc}"
+                return item, None, f"{item.url}: {type(exc).__name__}: {exc}", failure_details(exc, "normalization")
 
         articles = []
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            for _, article, error in executor.map(normalize, eligible):
-                if error:
-                    errors.append(error)
-                elif article and _in_window(datetime.fromisoformat(article.published_at), now, candidate_window):
-                    articles.append(article)
-        articles = _collapse_release_bursts(articles)[:maximum]
+        try:
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                for item, article, error, detail in executor.map(normalize, eligible):
+                    if error:
+                        errors.append(error)
+                        normalization_errors.append({"source_id": item.source_id, "article_id": article_id(item.url),
+                                                     "fetch_method": sources_by_id[item.source_id].fetch_method,
+                                                     "error_type": detail["error_type"], "error_summary": detail["error_summary"],
+                                                     "error_kind": detail["error_kind"], "http_status": detail["http_status"],
+                                                     "isolated": True})
+                    elif article and _in_window(datetime.fromisoformat(article.published_at), now, candidate_window):
+                        articles.append(article)
+            articles = _collapse_release_bursts(articles)[:maximum]
+        except Exception as exc:
+            raise mark_failure(exc, "normalization")
         window_hours = candidate_window
         if len(articles) >= minimum or candidate_window == 168:
             break
@@ -176,14 +196,19 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
                 inserted += int(store.add(article))
         finally:
             store.close()
-    result = RunResult(len(source_items), len(articles), inserted, window_hours, tuple(errors), tuple(articles), tuple(source_health))
+    result = RunResult(len(source_items), len(articles), inserted, window_hours, tuple(errors), tuple(articles),
+                       tuple(source_health), tuple(source_errors), tuple(normalization_errors))
     output = {
         "fetched_source_items": result.fetched_source_items, "accepted": result.accepted,
         "inserted": result.inserted, "time_window_hours": result.time_window_hours,
         "errors": list(result.errors), "articles": [article.to_dict() for article in result.articles],
         "source_health": list(result.source_health),
+        "source_errors": list(result.source_errors), "normalization_errors": list(result.normalization_errors),
     }
     data_dir = root / "data"
-    data_dir.mkdir(exist_ok=True)
-    (data_dir / "latest-run.json").write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        data_dir.mkdir(exist_ok=True)
+        (data_dir / "latest-run.json").write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise mark_failure(exc, "persistence")
     return result

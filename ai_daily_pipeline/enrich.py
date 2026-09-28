@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .deepseek import DeepSeekClient, DeepSeekError
+from .diagnostics import failure_details, failure_stage, mark_failure
 from .bilingual import BilingualValidationError, normalize_fact_schema, validate_semantic_consistency
 from .models import Article, Enrichment
 from .sources import BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS, TECH_CATEGORIES
@@ -327,14 +328,18 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
             "hard_fact_rejected": 0, "semantic_rejected": 0, "repaired": 0, "fallback_added": 0,
         }
         client = None
+        batch_counter = 0
+        active_batch_context: dict[str, object] = {}
+        last_failure: dict[str, object] | None = None
 
         def persist_audit() -> None:
             audit_path.write_text(json.dumps({
                 "generated_at": now.isoformat(), "task": TASK_NAME, "model": model, "summary": stats,
                 "entries": audit_entries, "usage": _usage_total(usages) if usages else {},
+                "failure": last_failure,
             }, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        def process_batch(articles: list[Article], *, fallback: bool) -> None:
+        def process_batch_body(articles: list[Article], *, fallback: bool) -> None:
             nonlocal model, character_limit, client
             if not articles:
                 return
@@ -353,19 +358,23 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
             try:
                 content, batch_usage, model_name = client.complete_json(system_prompt=NEWS_SYSTEM_PROMPT, user_prompt=batch_prompt, max_tokens=batch_output_tokens)
             except DeepSeekError as exc:
+                active_batch_context["model"] = exc.model or getattr(client, "model", None)
+                active_batch_context["token_usage"] = _usage_total([exc.usage]) if exc.usage else None
                 if exc.usage is not None:
                     store.record_usage(task=f"{TASK_NAME}_rejected", model=exc.model or "unknown", created_at=now.isoformat(), usage=exc.usage)
                     store.commit()
                 raise
             model = model_name
+            active_batch_context["model"] = model_name
+            active_batch_context["token_usage"] = _usage_total([batch_usage])
             usages.append(batch_usage)
             try:
                 results = _validated_batch(_extract_json(content), articles, model_name, now.isoformat())
-            except EnrichmentError:
+            except EnrichmentError as exc:
                 # A structurally invalid batch cannot be repaired safely, but its token use remains logged above.
                 store.record_usage(task=f"{TASK_NAME}_rejected", model=model_name, created_at=now.isoformat(), usage=batch_usage)
                 store.commit()
-                raise
+                raise mark_failure(exc, "validation")
             store.record_usage(task=TASK_NAME, model=model_name, created_at=now.isoformat(), usage=batch_usage)
             for result in results:
                 if isinstance(result.raw_item.get("fact_schema"), dict):
@@ -388,6 +397,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                     audit_entries.append(_audit_entry(result))
                     continue
                 # One item receives at most one repair call, restricted to the failed field(s).
+                active_batch_context["local_repair_triggered"] = True
                 repair_prompt = _repair_prompt(result.article, result.raw_item, issue, character_limit)
                 estimated_repair = len(REPAIR_SYSTEM_PROMPT) + len(repair_prompt) + repair_output_tokens
                 if store.daily_total_tokens(now.date().isoformat()) + estimated_repair > max_daily_tokens:
@@ -418,6 +428,29 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                 audit_entries.append({**_audit_entry(repaired, repaired=True), "initial_reject_stage": issue.stage, "initial_reject_reason": issue.reason})
             store.commit()
             persist_audit()
+
+        def process_batch(articles: list[Article], *, fallback: bool) -> None:
+            nonlocal batch_counter, active_batch_context, last_failure
+            if not articles:
+                return
+            batch_counter += 1
+            active_batch_context = {"batch_index": batch_counter, "batch_article_ids": [article.id for article in articles],
+                                    "model": None, "request_id": None, "token_usage": None,
+                                    "local_repair_triggered": False, "fallback": fallback}
+            usage_start = len(usages)
+            try:
+                process_batch_body(articles, fallback=fallback)
+            except Exception as exc:
+                if len(usages) > usage_start:
+                    active_batch_context["token_usage"] = _usage_total(usages[usage_start:])
+                stage = failure_stage(exc, "enrichment")
+                mark_failure(exc, stage, **active_batch_context)
+                last_failure = failure_details(exc, stage)
+                try:
+                    persist_audit()
+                except OSError:
+                    pass  # Diagnostic writing must not replace the original failure.
+                raise
 
         for offset in range(0, len(initial_articles), model_batch_size):
             process_batch(initial_articles[offset:offset + model_batch_size], fallback=False)

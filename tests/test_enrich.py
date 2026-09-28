@@ -94,6 +94,14 @@ class EnrichmentTests(unittest.TestCase):
                 client.return_value.complete_json.return_value = (response, usage, "configured-test-model")
                 with self.assertRaises(EnrichmentError):
                     run_enrichment(root, now=datetime(2026, 9, 14, tzinfo=UTC))
+            audit = json.loads((root / "data" / "bilingual-validation-audit.json").read_text(encoding="utf-8"))
+            self.assertEqual(audit["failure"]["skipped_reason"], "validation_failed")
+            self.assertEqual(audit["failure"]["batch_index"], 1)
+            self.assertEqual(audit["failure"]["batch_article_ids"], ["article-1"])
+            self.assertEqual(audit["failure"]["model"], "configured-test-model")
+            self.assertEqual(audit["failure"]["token_usage"]["total_tokens"], 150)
+            self.assertIsNone(audit["failure"]["request_id"])
+            self.assertFalse(audit["failure"]["local_repair_triggered"])
             store = ArticleStore(root / "data" / "ai_daily.sqlite3")
             try:
                 row = store.usage_rows()[0]
