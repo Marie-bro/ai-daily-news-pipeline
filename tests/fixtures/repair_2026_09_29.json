@@ -1,0 +1,1101 @@
+{
+  "date": "2026-09-29",
+  "samples": [
+    {
+      "article_id": "09d1d26fa19dd694ec40f7bb3bc136d48191abcd2b19156a45d7567a4b7fa32e",
+      "source": "Hugging Face Blog",
+      "title": "Holo4: powering generalist computer-use agents",
+      "fact_schema": {
+        "article_id": "09d1d26fa19dd694ec40f7bb3bc136d48191abcd2b19156a45d7567a4b7fa32e",
+        "category": "ai",
+        "core_facts": [
+          {
+            "id": "f1",
+            "type": "product",
+            "value": "Holo4 agentic models",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "Holo4"
+            ],
+            "chinese_forms": [
+              "Holo4"
+            ]
+          },
+          {
+            "id": "f2",
+            "type": "specification",
+            "value": "two sizes: 27B dense and 35B-A3B Mixture of Experts",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "27B dense and 35B-A3B Mixture of Experts"
+            ],
+            "chinese_forms": [
+              "27B 稠密版和 35B-A3B 混合专家版"
+            ]
+          },
+          {
+            "id": "f3",
+            "type": "availability",
+            "value": "available on the H Models API",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "H Models API"
+            ],
+            "chinese_forms": [
+              "H Models API"
+            ]
+          },
+          {
+            "id": "f4",
+            "type": "product",
+            "value": "Holotron4 Nano, an updated version of Holotron 3",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "Holotron4 Nano"
+            ],
+            "chinese_forms": [
+              "Holotron4 Nano"
+            ]
+          }
+        ],
+        "key_entities": [
+          "Hcompany",
+          "Holo4",
+          "Holotron4 Nano"
+        ],
+        "dates": [
+          "September 28, 2026"
+        ],
+        "numbers": [
+          "27B",
+          "35B-A3B"
+        ],
+        "versions": [
+          "Holo4",
+          "Holotron4 Nano"
+        ],
+        "products": [
+          "Holo4",
+          "Holotron4 Nano"
+        ],
+        "companies": [
+          "Hcompany"
+        ],
+        "technologies": [
+          "Mixture of Experts",
+          "agentic models"
+        ],
+        "scope": "generalist computer-use agents",
+        "limitations": [],
+        "importance_reasons": [
+          "New agentic models for computer use"
+        ]
+      },
+      "title_en": "Holo4: powering generalist computer-use agents",
+      "title_zh": "Holo4：驱动通用计算机使用智能体",
+      "what_happened_en": "Hcompany released Holo4, a new series of agentic models in two sizes: 27B dense and 35B-A3B Mixture of Experts. Both are available on the H Models API. An updated version of Holotron 3, Holotron4 Nano, was also released.",
+      "what_happened_zh": "Hcompany 发布了 Holo4，这是一个新的智能体模型系列，包含两种规模：27B 稠密版和 35B-A3B 混合专家版。两者均可在 H Models API 上使用。同时发布了 Holotron 3 的更新版本 Holotron4 Nano。",
+      "why_it_matters_en": "Holo4 provides new generalist computer-use agents, potentially advancing automation of software interaction.",
+      "why_it_matters_zh": "Holo4 提供了新的通用计算机使用智能体，可能推动软件交互自动化的发展。",
+      "original_validation_error": "what_happened: availability or release intent differs (['released', 'supported'] vs ['released'])"
+    },
+    {
+      "article_id": "d56e284128cf47b514f73d646b0e096ebab0dadda08cd9bc24018bb457d4d338",
+      "source": "Toyota Global Newsroom",
+      "title": "Sales, Production, and Export Results for August 2026 | Sales, Production, and Export Results | Profile | Company | Toyota Motor Corporation Official Global Website",
+      "fact_schema": {
+        "article_id": "d56e284128cf47b514f73d646b0e096ebab0dadda08cd9bc24018bb457d4d338",
+        "category": "mobility",
+        "core_facts": [
+          {
+            "id": "f1",
+            "type": "event",
+            "value": "Toyota announced sales, production, and export results for August 2026",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "sales, production, and export results for August 2026"
+            ],
+            "chinese_forms": [
+              "2026年8月销售、生产和出口结果"
+            ]
+          },
+          {
+            "id": "f2",
+            "type": "date",
+            "value": "September 29, 2026",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "September 29, 2026"
+            ],
+            "chinese_forms": [
+              "2026年9月29日"
+            ]
+          },
+          {
+            "id": "f3",
+            "type": "entity",
+            "value": "includes subsidiaries Daihatsu Motor Co., Ltd.",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "Daihatsu Motor Co., Ltd."
+            ],
+            "chinese_forms": [
+              "大发汽车公司"
+            ]
+          }
+        ],
+        "key_entities": [
+          "Toyota Motor Corporation",
+          "Daihatsu Motor Co., Ltd."
+        ],
+        "dates": [
+          "August 2026",
+          "September 29, 2026"
+        ],
+        "numbers": [],
+        "versions": [],
+        "products": [],
+        "companies": [
+          "Toyota Motor Corporation",
+          "Daihatsu Motor Co., Ltd."
+        ],
+        "technologies": [],
+        "scope": "August 2026 results",
+        "limitations": [],
+        "importance_reasons": [
+          "Monthly performance data for a major automaker"
+        ]
+      },
+      "title_en": "Sales, Production, and Export Results for August 2026",
+      "title_zh": "2026年8月销售、生产和出口结果",
+      "what_happened_en": "Toyota Motor Corporation announced its sales, production, and export results for August 2026, including those for subsidiaries Daihatsu Motor Co., Ltd., on September 29, 2026.",
+      "what_happened_zh": "丰田汽车公司于2026年9月29日公布了2026年8月的销售、生产和出口结果，包括子公司大发汽车公司的数据。",
+      "why_it_matters_en": "These results provide insight into Toyota's recent operational performance and market trends.",
+      "why_it_matters_zh": "这些结果提供了对丰田近期运营表现和市场趋势的洞察。",
+      "original_validation_error": "title: numbers differ (['number:2026'] vs ['number:2026', 'number:8'])"
+    },
+    {
+      "article_id": "21c224b7f1e72026e6d187319d37b7f65353c0b9952a6fd70157ab87b3798126",
+      "source": "ESA",
+      "title": "Successful Earth flyby improves Juice’s course to Jupiter",
+      "fact_schema": {
+        "article_id": "21c224b7f1e72026e6d187319d37b7f65353c0b9952a6fd70157ab87b3798126",
+        "category": "space",
+        "core_facts": [
+          {
+            "id": "f1",
+            "type": "event",
+            "value": "ESA's Jupiter Icy Moons Explorer (Juice) successfully performed an Earth flyby on 28 September",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "Earth flyby"
+            ],
+            "chinese_forms": [
+              "地球飞越"
+            ]
+          },
+          {
+            "id": "f2",
+            "type": "measurement",
+            "value": "deflected Juice by an angle of 20° and increased its velocity by 3.5 km/s",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "20°",
+              "3.5 km/s"
+            ],
+            "chinese_forms": [
+              "20°",
+              "3.5 公里/秒"
+            ]
+          },
+          {
+            "id": "f3",
+            "type": "measurement",
+            "value": "closest approach was at 13:45 CEST (11:45 UTC) on 28 September, at 8640 km above the Indian Ocean",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "13:45 CEST",
+              "8640 km"
+            ],
+            "chinese_forms": [
+              "中欧夏令时13:45",
+              "8640 公里"
+            ]
+          },
+          {
+            "id": "f4",
+            "type": "date",
+            "value": "September 28, 2026",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "September 28, 2026"
+            ],
+            "chinese_forms": [
+              "2026年9月28日"
+            ]
+          }
+        ],
+        "key_entities": [
+          "ESA",
+          "Juice"
+        ],
+        "dates": [
+          "September 28, 2026"
+        ],
+        "numbers": [
+          "20°",
+          "3.5 km/s",
+          "8640 km"
+        ],
+        "versions": [],
+        "products": [
+          "Juice"
+        ],
+        "companies": [
+          "ESA"
+        ],
+        "technologies": [
+          "gravity assist"
+        ],
+        "scope": "Earth flyby",
+        "limitations": [],
+        "importance_reasons": [
+          "Successful navigation for Jupiter mission"
+        ]
+      },
+      "title_en": "Successful Earth flyby improves Juice’s course to Jupiter",
+      "title_zh": "成功的地球飞越改善了Juice前往木星的航线",
+      "what_happened_en": "The European Space Agency's Jupiter Icy Moons Explorer (Juice) performed an Earth flyby on September 28, 2026, deflecting its path by 20° and increasing its velocity by 3.5 km/s. The closest approach was at 13:45 CEST (11:45 UTC) at an altitude of 8640 km above the Indian Ocean.",
+      "what_happened_zh": "欧洲空间局的木星冰月探测器（Juice）于2026年9月28日执行了一次地球飞越，使其路径偏转20°，速度增加3.5公里/秒。最近接近点位于中欧夏令时13:45（协调世界时11:45），高度为印度洋上空8640公里。",
+      "why_it_matters_en": "The flyby successfully adjusted Juice's trajectory using Earth's gravity, conserving fuel for its mission to Jupiter.",
+      "why_it_matters_zh": "此次飞越成功利用地球引力调整了Juice的轨迹，为其木星任务节省了燃料。",
+      "original_validation_error": "what_happened: versions differ (['3.5'] vs [])"
+    },
+    {
+      "article_id": "2891c49b05ab7df52453cb005c7e1e2f112999be1abba252d024317894b14a04",
+      "source": "国家发展和改革委员会",
+      "title": "《水电站大坝运行安全监督管理规定》 2026第47号令",
+      "fact_schema": {
+        "article_id": "2891c49b05ab7df52453cb005c7e1e2f112999be1abba252d024317894b14a04",
+        "category": "policy",
+        "core_facts": [
+          {
+            "id": "f1",
+            "type": "measure",
+            "value": "《水电站大坝运行安全监督管理规定》",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "Regulations on Safety Supervision and Management of Hydropower Station Dam Operations"
+            ],
+            "chinese_forms": [
+              "《水电站大坝运行安全监督管理规定》"
+            ]
+          },
+          {
+            "id": "f2",
+            "type": "issuing_body",
+            "value": "国家发展和改革委员会令第47号",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "Order No. 47 of the National Development and Reform Commission"
+            ],
+            "chinese_forms": [
+              "国家发展和改革委员会令第47号"
+            ]
+          },
+          {
+            "id": "f3",
+            "type": "approval_date",
+            "value": "2026年9月7日第36次委务会议审议通过",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "approved at the 36th commission meeting on September 7, 2026"
+            ],
+            "chinese_forms": [
+              "2026年9月7日第36次委务会议审议通过"
+            ]
+          },
+          {
+            "id": "f4",
+            "type": "effective_date",
+            "value": "自公布之日起施行",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "effective from the date of publication"
+            ],
+            "chinese_forms": [
+              "自公布之日起施行"
+            ]
+          }
+        ],
+        "key_entities": [
+          "国家发展和改革委员会",
+          "国家能源局",
+          "郑栅洁"
+        ],
+        "dates": [
+          "2026-09-07",
+          "2026-09-14",
+          "2026-09-28"
+        ],
+        "numbers": [
+          "第47号",
+          "第36次委务会议"
+        ],
+        "versions": [],
+        "products": [],
+        "companies": [],
+        "technologies": [],
+        "scope": "全国水电站大坝运行安全监督管理",
+        "limitations": [],
+        "importance_reasons": [
+          "为水电站大坝运行安全提供监管依据"
+        ]
+      },
+      "title_en": "Regulations on Safety Supervision and Management of Hydropower Station Dam Operations (Order No. 47 of 2026)",
+      "title_zh": "《水电站大坝运行安全监督管理规定》 2026第47号令",
+      "what_happened_en": "The National Development and Reform Commission issued Order No. 47, the Regulations on Safety Supervision and Management of Hydropower Station Dam Operations. The regulations were approved at the 36th commission meeting on September 7, 2026, signed on September 14, 2026, and take effect from the date of publication.",
+      "what_happened_zh": "国家发展和改革委员会发布第47号令《水电站大坝运行安全监督管理规定》。该规定于2026年9月7日第36次委务会议审议通过，2026年9月14日签署，自公布之日起施行。",
+      "why_it_matters_en": "The measure sets safety supervision rules for hydropower dam operations nationwide, affecting dam operators and energy regulators.",
+      "why_it_matters_zh": "该规定为全国水电站大坝运行安全设定监督管理规则，影响大坝运营方和能源监管部门。",
+      "original_validation_error": "what_happened: numbers differ (['number:47'] vs ['number:36', 'number:47'])"
+    },
+    {
+      "article_id": "cae2fc643322c6e84dc621a6f198aed7e503c5664d712cd39d709278ceef9d0c",
+      "source": "Cloudflare Blog",
+      "title": "Introducing cf: the agentic CLI for the entire Cloudflare API",
+      "fact_schema": {
+        "article_id": "cae2fc643322c6e84dc621a6f198aed7e503c5664d712cd39d709278ceef9d0c",
+        "category": "internet",
+        "core_facts": [
+          {
+            "id": "f1",
+            "type": "product_launch",
+            "value": "cf CLI",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "cf CLI"
+            ],
+            "chinese_forms": [
+              "cf CLI"
+            ]
+          },
+          {
+            "id": "f2",
+            "type": "capability",
+            "value": "enables agents to use every Cloudflare product",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "enables agents to use every Cloudflare product"
+            ],
+            "chinese_forms": [
+              "使智能体能够使用所有 Cloudflare 产品"
+            ]
+          },
+          {
+            "id": "f3",
+            "type": "metric",
+            "value": "agent usage of Wrangler reached 48% last week",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "agent usage of Wrangler reached 48% last week"
+            ],
+            "chinese_forms": [
+              "上周智能体对 Wrangler 的使用率达到 48%"
+            ]
+          },
+          {
+            "id": "f4",
+            "type": "configuration_format",
+            "value": "cloudflare.config.ts",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "cloudflare.config.ts"
+            ],
+            "chinese_forms": [
+              "cloudflare.config.ts"
+            ]
+          }
+        ],
+        "key_entities": [
+          "Cloudflare",
+          "Wrangler",
+          "cf"
+        ],
+        "dates": [
+          "March 2026",
+          "last week"
+        ],
+        "numbers": [
+          "48%",
+          "280 operations"
+        ],
+        "versions": [],
+        "products": [
+          "cf CLI",
+          "Wrangler",
+          "cloudflare.config.ts"
+        ],
+        "companies": [
+          "Cloudflare"
+        ],
+        "technologies": [
+          "CLI",
+          "TypeScript",
+          "JSON"
+        ],
+        "scope": "entire Cloudflare API",
+        "limitations": [],
+        "importance_reasons": [
+          "expands agent access to all Cloudflare products via a single CLI"
+        ]
+      },
+      "title_en": "Introducing cf: the agentic CLI for the entire Cloudflare API",
+      "title_zh": "推出 cf：面向整个 Cloudflare API 的智能体 CLI",
+      "what_happened_en": "Cloudflare introduced cf, a CLI that enables agents to use every Cloudflare product. Agent usage of Wrangler reached 48% last week, up from a quarter in March 2026. cf uses JSON as the default interface and introduces cloudflare.config.ts as the new configuration format, starting with Workers.",
+      "what_happened_zh": "Cloudflare 推出 cf，一个使智能体能够使用所有 Cloudflare 产品的 CLI。上周智能体对 Wrangler 的使用率达到 48%，高于 2026 年 3 月的四分之一。cf 以 JSON 为默认接口，并引入 cloudflare.config.ts 作为新配置格式，从 Workers 开始。",
+      "why_it_matters_en": "The tool expands agent-driven development by giving agents access to the full Cloudflare API beyond Wrangler's roughly 280 operations.",
+      "why_it_matters_zh": "该工具通过让智能体访问 Wrangler 约 280 项操作之外的完整 Cloudflare API，扩展了智能体驱动的开发。",
+      "original_validation_error": "what_happened: numbers differ (['number:2026', 'percent:48'] vs ['number:2026', 'number:3', 'percent:48'])"
+    },
+    {
+      "article_id": "f17ba435e8d2a7142078d60eb01bb6f3a581c0fcd8acefb37eb0bd85685e2309",
+      "source": "Cloudflare Blog",
+      "title": "Four months of VoidZero at Cloudflare: making the open-source JavaScript toolchain faster for all humans and agents",
+      "fact_schema": {
+        "article_id": "f17ba435e8d2a7142078d60eb01bb6f3a581c0fcd8acefb37eb0bd85685e2309",
+        "category": "internet",
+        "core_facts": [
+          {
+            "id": "f1",
+            "type": "commitment",
+            "value": "Vite, Vitest, Rolldown, Oxc, and Vite+ will stay open source, vendor-agnostic, and community-driven",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "Vite, Vitest, Rolldown, Oxc, and Vite+ will stay open source, vendor-agnostic, and community-driven"
+            ],
+            "chinese_forms": [
+              "Vite、Vitest、Rolldown、Oxc 和 Vite+ 将保持开源、供应商中立和社区驱动"
+            ]
+          },
+          {
+            "id": "f2",
+            "type": "metric",
+            "value": "more than 80 releases and over 1,200 issues closed in four months",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "more than 80 releases and over 1,200 issues closed in four months"
+            ],
+            "chinese_forms": [
+              "四个月内发布超过 80 个版本并关闭超过 1,200 个问题"
+            ]
+          },
+          {
+            "id": "f3",
+            "type": "performance",
+            "value": "Oxc React Compiler compiles React.js apps 10x faster",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "Oxc React Compiler compiles React.js apps 10x faster"
+            ],
+            "chinese_forms": [
+              "Oxc React Compiler 编译 React.js 应用速度提升 10 倍"
+            ]
+          },
+          {
+            "id": "f4",
+            "type": "release",
+            "value": "Vite+ is now 1.0",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "Vite+ is now 1.0"
+            ],
+            "chinese_forms": [
+              "Vite+ 现已发布 1.0"
+            ]
+          }
+        ],
+        "key_entities": [
+          "Cloudflare",
+          "VoidZero",
+          "Vite",
+          "Vitest",
+          "Rolldown",
+          "Oxc",
+          "Vite+"
+        ],
+        "dates": [
+          "four months ago",
+          "August",
+          "September"
+        ],
+        "numbers": [
+          "80 releases",
+          "1,200 issues",
+          "10x",
+          "50%",
+          "18x",
+          "7x",
+          "1.0"
+        ],
+        "versions": [
+          "Vitest 5",
+          "Vite+ 1.0"
+        ],
+        "products": [
+          "Vite",
+          "Vitest",
+          "Rolldown",
+          "Oxc",
+          "Vite+",
+          "Oxc React Compiler",
+          "tsgolint",
+          "Oxfmt"
+        ],
+        "companies": [
+          "Cloudflare",
+          "VoidZero"
+        ],
+        "technologies": [
+          "JavaScript",
+          "Rust",
+          "React.js",
+          "TypeScript"
+        ],
+        "scope": "open-source JavaScript toolchain",
+        "limitations": [],
+        "importance_reasons": [
+          "improves performance and stability of widely used open-source JavaScript tools"
+        ]
+      },
+      "title_en": "Four months of VoidZero at Cloudflare: making the open-source JavaScript toolchain faster for all humans and agents",
+      "title_zh": "VoidZero 加入 Cloudflare 四个月：为所有人类和智能体加速开源 JavaScript 工具链",
+      "what_happened_en": "Four months after VoidZero joined Cloudflare, Cloudflare reported shipping more than 80 releases and closing over 1,200 issues. Performance improvements include Oxc React Compiler compiling React.js apps 10x faster, Vitest 5 up to 50% faster than Vitest 4, tsgolint up to 18x faster than ESLint, and Oxfmt 7x faster than Prettier. Vite+ is now 1.0.",
+      "what_happened_zh": "VoidZero 加入 Cloudflare 四个月后，Cloudflare 报告发布超过 80 个版本并关闭超过 1,200 个问题。性能改进包括 Oxc React Compiler 编译 React.js 应用速度提升 10 倍、Vitest 5 比 Vitest 4 快最多 50%、tsgolint 比 ESLint 快最多 18 倍、Oxfmt 比 Prettier 快 7 倍。Vite+ 现已发布 1.0。",
+      "why_it_matters_en": "The updates improve speed and stability across widely used open-source JavaScript tools while maintaining open-source, vendor-agnostic commitments.",
+      "why_it_matters_zh": "这些更新提升了广泛使用的开源 JavaScript 工具的速度和稳定性，同时保持开源和供应商中立的承诺。",
+      "original_validation_error": "what_happened: numbers differ (['multiple:10', 'multiple:18', 'multiple:7', 'number:1', 'number:1200', 'number:4', 'number:5', 'number:80', 'percent:50'] vs ['multiple:10', 'multiple:18', 'multiple:7', 'number:1', 'number:200', 'number:4', 'number:5', 'number:80', 'percent:50'])"
+    },
+    {
+      "article_id": "2a0119434f02e37add0aa24b0efec8d525d1c60d99ef7d4b18085e90faea1178",
+      "source": "NIST",
+      "title": "NIST Provides Updates on National Construction Safety Team Activities",
+      "fact_schema": {
+        "article_id": "2a0119434f02e37add0aa24b0efec8d525d1c60d99ef7d4b18085e90faea1178",
+        "category": "science",
+        "core_facts": [
+          {
+            "id": "f1",
+            "type": "event",
+            "value": "NIST convened a two-day meeting of the National Construction Safety Team (NCST) Advisory Committee on Sept. 23 and 24, 2026",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "NIST convened a two-day meeting of the National Construction Safety Team (NCST) Advisory Committee on Sept. 23 and 24, 2026"
+            ],
+            "chinese_forms": [
+              "NIST 于 2026 年 9 月 23 日至 24 日召开为期两天的国家建筑安全小组（NCST）咨询委员会会议"
+            ]
+          },
+          {
+            "id": "f2",
+            "type": "investigation",
+            "value": "NCST investigations into the 2021 partial collapse of the Champlain Towers South",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "NCST investigations into the 2021 partial collapse of the Champlain Towers South"
+            ],
+            "chinese_forms": [
+              "NCST 对 2021 年 Champlain Towers South 部分倒塌事件的调查"
+            ]
+          },
+          {
+            "id": "f3",
+            "type": "person",
+            "value": "Scott Jones serves as a co-lead for the material science project",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "Scott Jones serves as a co-lead for the material science project"
+            ],
+            "chinese_forms": [
+              "Scott Jones 担任材料科学项目的联合负责人"
+            ]
+          }
+        ],
+        "key_entities": [
+          "NIST",
+          "National Construction Safety Team",
+          "Scott Jones",
+          "Champlain Towers South"
+        ],
+        "dates": [
+          "September 28, 2026",
+          "Sept. 23 and 24, 2026",
+          "2021"
+        ],
+        "numbers": [
+          "two-day"
+        ],
+        "versions": [],
+        "products": [],
+        "companies": [],
+        "technologies": [],
+        "scope": "NCST investigations into the 2021 partial collapse of the Champlain Towers South",
+        "limitations": [],
+        "importance_reasons": [
+          "provides updates on official investigation into a major building collapse"
+        ]
+      },
+      "title_en": "NIST Provides Updates on National Construction Safety Team Activities",
+      "title_zh": "NIST 提供国家建筑安全小组活动最新进展",
+      "what_happened_en": "NIST convened a two-day meeting of the National Construction Safety Team (NCST) Advisory Committee on Sept. 23 and 24, 2026. NIST provided updates on its NCST investigations into the 2021 partial collapse of the Champlain Towers South in Surfside, Florida. Scott Jones serves as a co-lead for the material science project in the investigation.",
+      "what_happened_zh": "NIST 于 2026 年 9 月 23 日至 24 日召开为期两天的国家建筑安全小组（NCST）咨询委员会会议。NIST 提供了其对 2021 年佛罗里达州瑟夫赛德 Champlain Towers South 部分倒塌事件的 NCST 调查进展。Scott Jones 担任调查中材料科学项目的联合负责人。",
+      "why_it_matters_en": "The updates provide insight into the official investigation of a major building collapse, with implications for construction safety standards.",
+      "why_it_matters_zh": "这些进展提供了对重大建筑倒塌事件官方调查的深入了解，对建筑安全标准具有影响。",
+      "original_validation_error": "what_happened: numbers differ (['number:2021', 'number:2026', 'number:24'] vs ['number:2021', 'number:24'])"
+    },
+    {
+      "article_id": "30d3e0d4c51df52c56ae563b6f80ab608727e8ba85fe772f3a60a0bb74879572",
+      "source": "MIT News",
+      "title": "Who we become when we talk to machines",
+      "fact_schema": {
+        "article_id": "30d3e0d4c51df52c56ae563b6f80ab608727e8ba85fe772f3a60a0bb74879572",
+        "category": "science",
+        "core_facts": [
+          {
+            "id": "f1",
+            "type": "person",
+            "value": "Professor Sherry Turkle",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "Professor Sherry Turkle"
+            ],
+            "chinese_forms": [
+              "Sherry Turkle教授"
+            ]
+          },
+          {
+            "id": "f2",
+            "type": "product",
+            "value": "new book, “Artificial Intimacy”",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "new book, “Artificial Intimacy”"
+            ],
+            "chinese_forms": [
+              "新书《人工亲密》"
+            ]
+          },
+          {
+            "id": "f3",
+            "type": "claim",
+            "value": "withering critique of chatbots and the antisocial dynamics she believes they encourage",
+            "rendered_in": [
+              "what_happened",
+              "why_it_matters"
+            ],
+            "english_forms": [
+              "withering critique of chatbots and the antisocial dynamics she believes they encourage"
+            ],
+            "chinese_forms": [
+              "对聊天机器人及其所助长的反社会动态的严厉批评"
+            ]
+          }
+        ],
+        "key_entities": [
+          "MIT",
+          "Sherry Turkle"
+        ],
+        "dates": [
+          "2026-09-29"
+        ],
+        "numbers": [],
+        "versions": [],
+        "products": [
+          "Artificial Intimacy"
+        ],
+        "companies": [
+          "MIT"
+        ],
+        "technologies": [
+          "chatbots"
+        ],
+        "scope": "critique of chatbots and antisocial dynamics",
+        "limitations": [],
+        "importance_reasons": [
+          "raises concerns about chatbots and antisocial dynamics"
+        ]
+      },
+      "title_en": "Who we become when we talk to machines",
+      "title_zh": "当我们与机器交谈时，我们会变成谁",
+      "what_happened_en": "Professor Sherry Turkle’s new book, “Artificial Intimacy,” offers a withering critique of chatbots and the antisocial dynamics she believes they encourage.",
+      "what_happened_zh": "Sherry Turkle教授的新书《人工亲密》对聊天机器人及其所助长的反社会动态提出了严厉批评。",
+      "why_it_matters_en": "The book raises concerns about chatbots and the antisocial dynamics they may encourage.",
+      "why_it_matters_zh": "该书引发了人们对聊天机器人及其可能助长的反社会动态的担忧。",
+      "original_validation_error": "what_happened: English and Chinese mention different shared facts"
+    },
+    {
+      "article_id": "3480bbae929c06ab6d68bbe11720ac5f70586056b081f85e870a027e8cfbd4a2",
+      "source": "NASA",
+      "title": "What You Need to Know About NASA’s SpaceX Crew-13 Mission - NASA",
+      "fact_schema": {
+        "article_id": "3480bbae929c06ab6d68bbe11720ac5f70586056b081f85e870a027e8cfbd4a2",
+        "category": "space",
+        "core_facts": [
+          {
+            "id": "f1",
+            "type": "organization",
+            "value": "NASA",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "NASA"
+            ],
+            "chinese_forms": [
+              "美国国家航空航天局"
+            ]
+          },
+          {
+            "id": "f2",
+            "type": "organization",
+            "value": "SpaceX",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "SpaceX"
+            ],
+            "chinese_forms": [
+              "SpaceX"
+            ]
+          },
+          {
+            "id": "f3",
+            "type": "mission",
+            "value": "Crew-13",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "Crew-13"
+            ],
+            "chinese_forms": [
+              "Crew-13"
+            ]
+          }
+        ],
+        "key_entities": [
+          "NASA",
+          "SpaceX",
+          "Crew-13"
+        ],
+        "dates": [
+          "2026-09-28"
+        ],
+        "numbers": [],
+        "versions": [],
+        "products": [],
+        "companies": [
+          "NASA",
+          "SpaceX"
+        ],
+        "technologies": [],
+        "scope": "NASA's SpaceX Crew-13 mission",
+        "limitations": [],
+        "importance_reasons": [
+          "Commercial crew mission to the International Space Station"
+        ]
+      },
+      "title_en": "What You Need to Know About NASA's SpaceX Crew-13 Mission",
+      "title_zh": "关于NASA的SpaceX Crew-13任务你需要了解的内容",
+      "what_happened_en": "NASA published an article about the SpaceX Crew-13 mission.",
+      "what_happened_zh": "NASA发布了一篇关于SpaceX Crew-13任务的文章。",
+      "why_it_matters_en": "It provides information about a commercial crew mission to the International Space Station.",
+      "why_it_matters_zh": "它提供了关于前往国际空间站的商业载人任务的信息。",
+      "original_validation_error": "title: English and Chinese mention different shared facts"
+    },
+    {
+      "article_id": "825d01f7bfb9a5d422ff8c60edc5ff62c96617465e03b7c0f56e09397edff023",
+      "source": "NASA",
+      "title": "Space Station View of Earth at Night - NASA",
+      "fact_schema": {
+        "article_id": "825d01f7bfb9a5d422ff8c60edc5ff62c96617465e03b7c0f56e09397edff023",
+        "category": "space",
+        "core_facts": [
+          {
+            "id": "f1",
+            "type": "organization",
+            "value": "NASA",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "NASA"
+            ],
+            "chinese_forms": [
+              "美国国家航空航天局"
+            ]
+          },
+          {
+            "id": "f2",
+            "type": "image",
+            "value": "Space Station View of Earth at Night",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "Space Station View of Earth at Night"
+            ],
+            "chinese_forms": [
+              "空间站拍摄的地球夜景"
+            ]
+          }
+        ],
+        "key_entities": [
+          "NASA",
+          "International Space Station"
+        ],
+        "dates": [
+          "2026-09-28"
+        ],
+        "numbers": [],
+        "versions": [],
+        "products": [],
+        "companies": [
+          "NASA"
+        ],
+        "technologies": [],
+        "scope": "Image of Earth at night from the space station",
+        "limitations": [],
+        "importance_reasons": [
+          "Publicly available imagery from the International Space Station"
+        ]
+      },
+      "title_en": "Space Station View of Earth at Night",
+      "title_zh": "空间站拍摄的地球夜景",
+      "what_happened_en": "NASA published an image article titled 'Space Station View of Earth at Night'.",
+      "what_happened_zh": "NASA发布了一篇题为“空间站拍摄的地球夜景”的图片文章。",
+      "why_it_matters_en": "It offers a view of Earth at night captured from the space station.",
+      "why_it_matters_zh": "它提供了从空间站拍摄的地球夜景视图。",
+      "original_validation_error": "what_happened: English and Chinese mention different shared facts"
+    },
+    {
+      "article_id": "3a5310176237c677f42bbcd00ad6ab608ca1dcebb1592e382524b16a5da911ef",
+      "source": "NASA",
+      "title": "NASA ORBIT Challenge 2027 - NASA",
+      "fact_schema": {
+        "article_id": "3a5310176237c677f42bbcd00ad6ab608ca1dcebb1592e382524b16a5da911ef",
+        "category": "space",
+        "core_facts": [
+          {
+            "id": "f1",
+            "type": "organization",
+            "value": "NASA",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "NASA"
+            ],
+            "chinese_forms": [
+              "美国国家航空航天局"
+            ]
+          },
+          {
+            "id": "f2",
+            "type": "program",
+            "value": "ORBIT Challenge 2027",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "ORBIT Challenge 2027"
+            ],
+            "chinese_forms": [
+              "ORBIT挑战赛2027"
+            ]
+          }
+        ],
+        "key_entities": [
+          "NASA",
+          "ORBIT Challenge 2027"
+        ],
+        "dates": [
+          "2026-09-28"
+        ],
+        "numbers": [],
+        "versions": [],
+        "products": [],
+        "companies": [
+          "NASA"
+        ],
+        "technologies": [],
+        "scope": "NASA ORBIT Challenge 2027",
+        "limitations": [],
+        "importance_reasons": [
+          "NASA challenge program for 2027"
+        ]
+      },
+      "title_en": "NASA ORBIT Challenge 2027",
+      "title_zh": "NASA ORBIT挑战赛2027",
+      "what_happened_en": "NASA published a page about the ORBIT Challenge 2027.",
+      "what_happened_zh": "NASA发布了一个关于ORBIT挑战赛2027的页面。",
+      "why_it_matters_en": "It announces a NASA challenge program scheduled for 2027.",
+      "why_it_matters_zh": "它宣布了一项计划于2027年举办的NASA挑战赛项目。",
+      "original_validation_error": "title: English and Chinese mention different shared facts"
+    },
+    {
+      "article_id": "2f7c2d78c61cfcd2282493d902552c6af817f952fa8d5e57102bc2dbe48c5f24",
+      "source": "Cloudflare Blog",
+      "title": "Introducing Forge: the open source pipeline for generating SDKs, CLIs, docs, and more",
+      "fact_schema": {
+        "article_id": "2f7c2d78c61cfcd2282493d902552c6af817f952fa8d5e57102bc2dbe48c5f24",
+        "category": "software",
+        "core_facts": [
+          {
+            "id": "f1",
+            "type": "product",
+            "value": "Forge",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "Forge"
+            ],
+            "chinese_forms": [
+              "Forge"
+            ]
+          },
+          {
+            "id": "f2",
+            "type": "company",
+            "value": "Cloudflare",
+            "rendered_in": [
+              "what_happened"
+            ],
+            "english_forms": [
+              "Cloudflare"
+            ],
+            "chinese_forms": [
+              "Cloudflare"
+            ]
+          },
+          {
+            "id": "f3",
+            "type": "feature",
+            "value": "open source, pluggable generation pipeline",
+            "rendered_in": [
+              "title",
+              "what_happened"
+            ],
+            "english_forms": [
+              "open source, pluggable generation pipeline"
+            ],
+            "chinese_forms": [
+              "开源、可插拔的生成管道"
+            ]
+          }
+        ],
+        "key_entities": [
+          "Cloudflare",
+          "Forge"
+        ],
+        "dates": [
+          "2026-09-28"
+        ],
+        "numbers": [],
+        "versions": [],
+        "products": [
+          "Forge"
+        ],
+        "companies": [
+          "Cloudflare"
+        ],
+        "technologies": [],
+        "scope": "Open source pipeline for generating SDKs, CLIs, docs, and libraries",
+        "limitations": [],
+        "importance_reasons": [
+          "Open source tool for generating developer surfaces like SDKs and CLIs"
+        ]
+      },
+      "title_en": "Introducing Forge: the open source pipeline for generating SDKs, CLIs, docs, and more",
+      "title_zh": "推出Forge：用于生成SDK、CLI、文档等的开源管道",
+      "what_happened_en": "Cloudflare introduced Forge, an open source, pluggable generation pipeline for SDKs, CLIs, docs, and libraries.",
+      "what_happened_zh": "Cloudflare推出了Forge，一个用于生成SDK、CLI、文档和库的开源、可插拔生成管道。",
+      "why_it_matters_en": "It allows anyone to deploy and run a pipeline for generating developer tools and documentation for free.",
+      "why_it_matters_zh": "它允许任何人免费部署和运行用于生成开发者工具和文档的管道。",
+      "original_validation_error": "why_it_matters: English and Chinese mention different shared facts"
+    }
+  ]
+}

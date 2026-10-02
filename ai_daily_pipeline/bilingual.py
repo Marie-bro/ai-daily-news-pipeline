@@ -10,6 +10,7 @@ therefore accepted when the common schema declares the two forms as one fact.
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import re
+import unicodedata
 from typing import Iterable
 
 
@@ -32,6 +33,25 @@ _DATE_EN_RANGE = re.compile(
     r"(?P<start>[12]?\d|3[01])\s*[-\u2013]\s*(?P<end>[12]?\d|3[01])(?:,?\s*(?P<year>20\d{2}))?\b",
     re.IGNORECASE,
 )
+_DATE_EN_AND_RANGE = re.compile(
+    r"\b(?P<month>jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+"
+    r"(?P<start>[12]?\d|3[01])\s+and\s+(?P<end>[12]?\d|3[01])(?:,?\s*(?P<year>20\d{2}))?\b",
+    re.IGNORECASE,
+)
+_DATE_ZH_AND_RANGE = re.compile(
+    r"(?:(?P<year>20\d{2})\s*年\s*)?(?P<month>1[0-2]|0?[1-9])\s*月\s*"
+    r"(?P<start>3[01]|[12]\d|0?[1-9])\s*[日号]?\s*(?:和|与|及|至|、)\s*"
+    r"(?P<end>3[01]|[12]\d|0?[1-9])\s*[日号]?"
+)
+_DATE_EN_MONTH_YEAR = re.compile(
+    r"\b(?P<month>jan(?:uary)?|feb(?:ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|"
+    r"jul(y)?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?)\.?\s+(?P<year>20\d{2})\b",
+    re.IGNORECASE,
+)
+_DATE_ZH_YEAR_MONTH = re.compile(
+    r"(?P<year>20\d{2})\s*年\s*(?P<month>1[0-2]|0?[1-9])\s*月(?!\s*\d{1,2}\s*[日号])"
+)
 _TIME = re.compile(r"(?<!\d)(?:[01]?\d|2[0-3]):[0-5]\d(?!\d)")
 _MONTHS = {
     "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
@@ -39,16 +59,18 @@ _MONTHS = {
     "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
     "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
 }
-_VERSION = re.compile(r"\bv?\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
+_VERSION = re.compile(r"(?<![A-Za-z0-9_.])v?\d+(?:\.\d+){1,3}(?![A-Za-z0-9_]|\.\d)", re.IGNORECASE)
 _SCALED_NUMBER_SUFFIX = re.compile(r"\s*(?:thousand|million|billion|trillion)\b", re.IGNORECASE)
+_MEASUREMENT_SUFFIX = re.compile(r"\s*(?:km\s*/\s*s(?![A-Za-z])|公里\s*/\s*秒|千米\s*/\s*秒)", re.IGNORECASE)
 _EN_NUMBER = re.compile(
     r"(?<![\w.])(?P<value>\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(?P<unit>%|percent|thousand|million|billion|trillion|[kKmMbB]|[xX])?(?!\w)",
     re.IGNORECASE,
 )
 _ZH_NUMBER = re.compile(
-    r"(?<![A-Za-z0-9_.])(?P<value>\d+(?:\.\d+)?)\s*"
+    r"(?<![A-Za-z0-9_.])(?P<value>\d{1,3}(?:[,，]\d{3})+|\d+(?:\.\d+)?)\s*"
     r"(?P<unit>\u4e07\u4ebf|\u5343\u4e07|\u767e\u4e07|%|\uff05|\u5343|\u4e07|\u4ebf|\u500d|[kKmMbB]|[xX])?(?![A-Za-z0-9_])"
 )
+_EN_ORDINAL = re.compile(r"(?<![\w.])(?P<value>\d{1,3}(?:,\d{3})+|\d+)(?:st|nd|rd|th)\b", re.IGNORECASE)
 _EN_NUMBER_WORD = re.compile(
     r"\b(?P<word>one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*-?\s*(?:loops?|steps?|particles?)\b",
     re.IGNORECASE,
@@ -64,9 +86,12 @@ _ZH_CLASSIFIED_NUMBER = re.compile(
 )
 _EN_AVAILABILITY = re.compile(r"\b(?:does not support|not supported|unavailable|available|supports?|released|release|ships?|will release|planned)\b", re.IGNORECASE)
 _ZH_AVAILABILITY = re.compile(
-    r"(?:\u4e0d\u652f\u6301|\u672a\u652f\u6301|\u4e0d\u53ef\u7528|\u53ef\u7528|\u652f\u6301|"
-    r"\u5df2\u53d1\u5e03|\u53d1\u5e03|\u5c06\u53d1\u5e03|\u8ba1\u5212\u53d1\u5e03|\u5f00\u653e|\u91ca\u653e|\u83b7\u5f97|\u83b7\u53d6)"
+    r"(?:\u4e0d\u652f\u6301|\u672a\u652f\u6301|\u4e0d\u53ef\u4f7f\u7528|\u65e0\u6cd5\u4f7f\u7528|\u4e0d\u53ef\u7528|"
+    r"\u5c06\u53d1\u5e03|\u8ba1\u5212\u53d1\u5e03|\u5373\u5c06\u4e0a\u7ebf|\u8ba1\u5212\u4e0a\u7ebf|"
+    r"\u5df2\u53d1\u5e03|\u53d1\u5e03|\u5df2\u4e0a\u7ebf|\u4e0a\u7ebf|\u53ef\u7528|"
+    r"\u53ef(?:\u4ee5|\u5728[^\u3002\uff1b;\u4e0d\u65e0]{0,60})?\u4f7f\u7528|\u652f\u6301|\u5f00\u653e|\u91ca\u653e|\u83b7\u5f97|\u83b7\u53d6)"
 )
+_FORM_PUNCTUATION = re.compile(r"[\"'‘’“”《》,，。:：;；!?！？（）()\[\]{}]")
 _HARD_FACT_TYPES = {
     "organization", "organisation", "company", "institution", "product", "model", "technology", "technical_name", "version",
 }
@@ -147,13 +172,32 @@ def normalize_fact_schema(value: object, article_id: str) -> dict[str, object]:
 
 
 def _contains_any(text: str, forms: Iterable[str]) -> bool:
-    folded = re.sub(r"\s+", "", text.casefold())
-    return any(re.sub(r"\s+", "", form.casefold()) in folded for form in forms)
+    def normalized(value: str) -> str:
+        value = unicodedata.normalize("NFKC", value).casefold()
+        return re.sub(r"\s+", " ", _FORM_PUNCTUATION.sub(" ", value)).strip()
+
+    folded = normalized(text)
+    for form in forms:
+        term = normalized(form)
+        if not term:
+            continue
+        prefix = r"(?<![a-z0-9])" if term[0] in "abcdefghijklmnopqrstuvwxyz0123456789" else ""
+        suffix = r"(?![a-z0-9])" if term[-1] in "abcdefghijklmnopqrstuvwxyz0123456789" else ""
+        if re.search(prefix + re.escape(term) + suffix, folded):
+            return True
+    return False
 
 
 def _observed_schema_facts(text: str, facts: list[dict[str, object]], language: str) -> set[str]:
     form_key = "english_forms" if language == "en" else "chinese_forms"
-    return {str(fact["id"]) for fact in facts if _contains_any(text, fact[form_key])}
+    other_key = "chinese_forms" if language == "en" else "english_forms"
+    observed: set[str] = set()
+    for fact in facts:
+        # Acronyms and unchanged product names remain the same entity in either language.
+        neutral_forms = [form for form in fact[other_key] if re.fullmatch(r"[A-Za-z][A-Za-z0-9+./-]*", form)]
+        if _contains_any(text, [*fact[form_key], *neutral_forms]):
+            observed.add(str(fact["id"]))
+    return observed
 
 
 def _decimal_text(value: Decimal) -> str:
@@ -173,7 +217,7 @@ def _numbers(text: str, language: str) -> set[str]:
     result: set[str] = set()
     for match in pattern.finditer(text):
         try:
-            value = Decimal(match.group("value").replace(",", ""))
+            value = Decimal(match.group("value").replace(",", "").replace("，", ""))
         except (InvalidOperation, TypeError):
             continue
         unit = (match.group("unit") or "").casefold()
@@ -192,6 +236,8 @@ def _numbers(text: str, language: str) -> set[str]:
         else:
             result.add(f"number:{_decimal_text(value * multipliers[unit])}")
     if language == "en":
+        for match in _EN_ORDINAL.finditer(text):
+            result.add(f"number:{_decimal_text(Decimal(match.group('value').replace(',', '')))}")
         for match in _EN_NUMBER_WORD.finditer(text):
             result.add(f"number:{_NUMBER_WORDS[match.group('word').casefold()]}")
         for match in _EN_SCALED_NUMBER_WORD.finditer(text):
@@ -210,6 +256,12 @@ def _dates(text: str) -> set[str]:
     found: set[str] = set()
     for match in _DATE_ISO.finditer(text):
         found.add(f"{match.group('year')}-{int(match.group('month')):02d}-{int(match.group('day')):02d}")
+    for pattern in (_DATE_ZH_AND_RANGE, _DATE_EN_AND_RANGE):
+        for match in pattern.finditer(text):
+            month = _MONTHS[match.group("month").casefold().rstrip(".")] if pattern is _DATE_EN_AND_RANGE else int(match.group("month"))
+            prefix = f"{match.group('year')}-" if match.group("year") else ""
+            found.add(f"{prefix}{month:02d}-{int(match.group('start')):02d}")
+            found.add(f"{prefix}{month:02d}-{int(match.group('end')):02d}")
     for match in _DATE_ZH.finditer(text):
         prefix = f"{match.group('year')}-" if match.group("year") else ""
         found.add(f"{prefix}{int(match.group('month')):02d}-{int(match.group('day')):02d}")
@@ -222,15 +274,23 @@ def _dates(text: str) -> set[str]:
         month = _MONTHS[match.group("month").casefold().rstrip(".")]
         prefix = f"{match.group('year')}-" if match.group("year") else ""
         found.add(f"{prefix}{month:02d}-{int(match.group('day')):02d}")
+    for match in _DATE_EN_MONTH_YEAR.finditer(text):
+        found.add(f"{match.group('year')}-{_MONTHS[match.group('month').casefold().rstrip('.')]:02d}")
+    for match in _DATE_ZH_YEAR_MONTH.finditer(text):
+        found.add(f"{match.group('year')}-{int(match.group('month')):02d}")
     return found
 
 
 def _without_dates(text: str) -> str:
     """Dates are checked separately so month notation is not double-counted as a metric."""
+    text = _DATE_EN_AND_RANGE.sub(" ", text)
+    text = _DATE_ZH_AND_RANGE.sub(" ", text)
     text = _DATE_EN_RANGE.sub(" ", text)
     text = _DATE_ISO.sub(" ", text)
     text = _DATE_ZH.sub(" ", text)
     text = _DATE_EN.sub(" ", text)
+    text = _DATE_EN_MONTH_YEAR.sub(" ", text)
+    text = _DATE_ZH_YEAR_MONTH.sub(" ", text)
     return _TIME.sub(" ", text)
 
 
@@ -240,7 +300,12 @@ def _times(text: str) -> set[str]:
 
 def _dates_compatible(left: set[str], right: set[str]) -> bool:
     def same(a: str, b: str) -> bool:
-        return a == b or a[-5:] == b[-5:]
+        if a == b:
+            return True
+        # Omitted years may match explicit years; conflicting explicit years may not.
+        if (len(a), len(b)) in {(5, 10), (10, 5)}:
+            return a[-5:] == b[-5:]
+        return False
     return all(any(same(a, b) for b in right) for a in left) and all(any(same(b, a) for a in left) for b in right)
 
 
@@ -249,7 +314,7 @@ def _versions(text: str) -> set[str]:
     found: set[str] = set()
     for match in _VERSION.finditer(text):
         suffix = text[match.end():]
-        if (_SCALED_NUMBER_SUFFIX.match(suffix) or suffix[:1] in {"%", "\uff05"}
+        if (_SCALED_NUMBER_SUFFIX.match(suffix) or _MEASUREMENT_SUFFIX.match(suffix) or suffix[:1] in {"%", "\uff05"}
                 or re.match(r"\s*(?:[xX]|\u500d|\u5343|\u4e07|\u4ebf|\u4e07\u4ebf|\u767e\u4e07|\u5343\u4e07)", suffix)):
             continue
         found.add(match.group(0).casefold())
@@ -265,11 +330,11 @@ def _availability(text: str, language: str) -> set[str]:
             normalized.add("released")
             continue
         if language == "zh":
-            if term in {"\u4e0d\u652f\u6301", "\u672a\u652f\u6301", "\u4e0d\u53ef\u7528"}:
+            if term in {"\u4e0d\u652f\u6301", "\u672a\u652f\u6301", "\u4e0d\u53ef\u7528", "\u4e0d\u53ef\u4f7f\u7528", "\u65e0\u6cd5\u4f7f\u7528"}:
                 normalized.add("unsupported")
-            elif term in {"\u5c06\u53d1\u5e03", "\u8ba1\u5212\u53d1\u5e03"}:
+            elif term in {"\u5c06\u53d1\u5e03", "\u8ba1\u5212\u53d1\u5e03", "\u5373\u5c06\u4e0a\u7ebf", "\u8ba1\u5212\u4e0a\u7ebf"}:
                 normalized.add("planned")
-            elif term in {"\u5df2\u53d1\u5e03", "\u53d1\u5e03", "\u91ca\u653e"}:
+            elif term in {"\u5df2\u53d1\u5e03", "\u53d1\u5e03", "\u5df2\u4e0a\u7ebf", "\u4e0a\u7ebf", "\u91ca\u653e"}:
                 normalized.add("released")
             else:
                 normalized.add("supported")

@@ -133,3 +133,90 @@ class SharedFactSchemaTests(unittest.TestCase):
                 stored.close()
             audit = json.loads((root / "data" / "bilingual-validation-audit.json").read_text(encoding="utf-8"))
             self.assertTrue(audit["entries"][0]["repaired"])
+
+
+class ValidatorOfflineRegressionTests(unittest.TestCase):
+    @staticmethod
+    def _facts(*core_facts: dict[str, object]) -> dict[str, object]:
+        return {"core_facts": list(core_facts)}
+
+    def test_year_month_equivalence_and_conflicts(self):
+        facts = self._facts()
+        validate_semantic_consistency("Results for August 2026", "2026 年 8 月的结果", "title", facts)
+        with self.assertRaisesRegex(BilingualValidationError, "dates differ"):
+            validate_semantic_consistency("Results for August 2026", "2026 年 9 月的结果", "title", facts)
+        with self.assertRaisesRegex(BilingualValidationError, "dates differ"):
+            validate_semantic_consistency("Results for August 2026", "2025 年 8 月的结果", "title", facts)
+
+    def test_ordinal_equivalence_and_conflict(self):
+        facts = self._facts()
+        validate_semantic_consistency("Approved at the 36th meeting", "在第 36 次会议通过", "what_happened", facts)
+        with self.assertRaisesRegex(BilingualValidationError, "numbers differ"):
+            validate_semantic_consistency("Approved at the 36th meeting", "在第 37 次会议通过", "what_happened", facts)
+
+    def test_chinese_thousands_separator_and_conflict(self):
+        facts = self._facts()
+        validate_semantic_consistency("Closed 1,200 issues", "关闭 1200 个问题", "what_happened", facts)
+        with self.assertRaisesRegex(BilingualValidationError, "numbers differ"):
+            validate_semantic_consistency("Closed 1,200 issues", "关闭 1,300 个问题", "what_happened", facts)
+
+    def test_measurement_is_not_version_but_real_versions_still_conflict(self):
+        facts = self._facts()
+        validate_semantic_consistency("Speed increased by 3.5 km/s", "速度增加 3.5 公里/秒", "what_happened", facts)
+        with self.assertRaisesRegex(BilingualValidationError, "numbers differ"):
+            validate_semantic_consistency("Speed increased by 3.5 km/s", "速度增加 3.6 公里/秒", "what_happened", facts)
+        with self.assertRaisesRegex(BilingualValidationError, "versions differ"):
+            validate_semantic_consistency("Version v3.5 was released", "发布了 v4.0 版本", "title", facts)
+
+    def test_cross_language_acronym_alias_is_exact(self):
+        facts = self._facts({
+            "id": "agency", "type": "organization", "english_forms": ["NASA"],
+            "chinese_forms": ["美国国家航空航天局"],
+        })
+        validate_semantic_consistency("NASA issued an update", "美国国家航空航天局发布更新", "title", facts)
+        validate_semantic_consistency("NASA issued an update", "NASA 发布更新", "title", facts)
+        with self.assertRaisesRegex(BilingualValidationError, "different shared facts"):
+            validate_semantic_consistency("NASA issued an update", "ESA 发布更新", "title", facts)
+        with self.assertRaisesRegex(BilingualValidationError, "different shared facts"):
+            validate_semantic_consistency("NASA issued an update", "NASAL 发布更新", "title", facts)
+
+    def test_entity_word_boundary_and_book_punctuation(self):
+        forge = self._facts({
+            "id": "product", "type": "product", "english_forms": ["Forge"], "chinese_forms": ["Forge"],
+        })
+        validate_semantic_consistency("A pipeline for generating tools", "一个用于生成工具的管道", "why_it_matters", forge)
+        with self.assertRaisesRegex(BilingualValidationError, "different shared facts"):
+            validate_semantic_consistency("Forge generates tools", "一个用于生成工具的管道", "why_it_matters", forge)
+        book = self._facts({
+            "id": "book", "type": "product", "english_forms": ["new book, “Artificial Intimacy”"],
+            "chinese_forms": ["新书《人工亲密》"],
+        })
+        validate_semantic_consistency("Her new book, “Artificial Intimacy,” appeared", "她的新书《人工亲密》问世", "title", book)
+        with self.assertRaisesRegex(BilingualValidationError, "different shared facts"):
+            validate_semantic_consistency("Her new book, “Artificial Intimacy,” appeared", "她的另一部作品问世", "title", book)
+
+    def test_availability_phrasing_and_genuine_conflicts(self):
+        facts = self._facts()
+        validate_semantic_consistency(
+            "The model was released and is available on the API", "该模型已发布，可在 API 上使用", "what_happened", facts,
+        )
+        with self.assertRaisesRegex(BilingualValidationError, "availability or release intent differs"):
+            validate_semantic_consistency("The model was released", "该模型计划发布", "what_happened", facts)
+        with self.assertRaisesRegex(BilingualValidationError, "availability or release intent differs"):
+            validate_semantic_consistency("The API is not supported", "API 支持该功能", "what_happened", facts)
+        with self.assertRaisesRegex(BilingualValidationError, "availability or release intent differs"):
+            validate_semantic_consistency("The API is available", "API 在此条件下不可使用", "what_happened", facts)
+
+    def test_all_twelve_unchanged_historical_repair_samples(self):
+        path = Path(__file__).parent / "fixtures" / "repair_2026_09_29.json"
+        samples = json.loads(path.read_text(encoding="utf-8"))["samples"]
+        self.assertEqual(len(samples), 12)
+        self.assertEqual(len({item["article_id"] for item in samples}), 12)
+        for item in samples:
+            with self.subTest(article_id=item["article_id"]):
+                self.assertTrue(item["original_validation_error"])
+                facts = normalize_fact_schema(item["fact_schema"], item["article_id"])
+                for field in ("title", "what_happened", "why_it_matters"):
+                    validate_semantic_consistency(
+                        item[f"{field}_en"], item[f"{field}_zh"], field, facts,
+                    )
