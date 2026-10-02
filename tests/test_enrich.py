@@ -6,7 +6,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from ai_daily_pipeline.deepseek import DeepSeekError
+from ai_daily_pipeline.deepseek import DeepSeekClient, DeepSeekError
 from ai_daily_pipeline.enrich import EnrichmentError, TASK_NAME, _dedupe_events, _validated_enrichments, run_enrichment
 from ai_daily_pipeline.models import Article, Enrichment
 from ai_daily_pipeline.store import ArticleStore
@@ -37,6 +37,46 @@ def model_item(article_id: str = "article-1") -> dict[str, object]:
 
 
 class EnrichmentTests(unittest.TestCase):
+    def test_network_retry_records_one_usage_and_one_enrichment(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "data").mkdir()
+            store = ArticleStore(root / "data" / "ai_daily.sqlite3")
+            store.add(article())
+            store.close()
+            response_body = {"items": [model_item()]}
+            class Response:
+                def __enter__(self): return self
+                def __exit__(self, *_args): return None
+                def read(self):
+                    return json.dumps({"choices": [{"message": {"content": json.dumps(response_body)}}],
+                                       "usage": {"prompt_tokens": 120, "completion_tokens": 80, "total_tokens": 200},
+                                       "model": "configured-test-model"}).encode()
+            calls = []
+            def opener(_request, timeout):
+                calls.append(timeout)
+                if len(calls) == 1:
+                    raise ConnectionResetError("temporary reset")
+                return Response()
+            with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key", "DEEPSEEK_MODEL": "configured-test-model"}), \
+                 patch("ai_daily_pipeline.deepseek.time.sleep"), \
+                 patch("ai_daily_pipeline.enrich.DeepSeekClient", side_effect=lambda: DeepSeekClient(opener=opener)):
+                result = run_enrichment(root, now=datetime(2026, 9, 14, tzinfo=UTC))
+            self.assertEqual(result.saved, 1)
+            self.assertEqual(len(calls), 2)
+            store = ArticleStore(root / "data" / "ai_daily.sqlite3")
+            try:
+                usage_rows = store.usage_rows()
+                self.assertEqual(len(usage_rows), 1)
+                self.assertEqual(usage_rows[0]["total_tokens"], 200)
+            finally:
+                store.close()
+            audit = json.loads((root / "data" / "bilingual-validation-audit.json").read_text(encoding="utf-8"))
+            attempts = audit["model_request_attempts"]
+            self.assertEqual(len(attempts), 2)
+            self.assertEqual([item["usage_recorded"] for item in attempts], [False, True])
+
+
     def test_same_event_from_multiple_sources_occupies_one_daily_item(self):
         base = dict(article_id="a", task=TASK_NAME, generated_at="2026-09-14T00:00:00+00:00", model="m",
                     title_original="Original", source="Official", published_at="2026-09-14T00:00:00+00:00",

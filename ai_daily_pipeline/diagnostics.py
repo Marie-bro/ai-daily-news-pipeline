@@ -114,10 +114,11 @@ def failure_details(exc: Exception, default_stage: str) -> dict[str, object]:
     context = getattr(exc, "radar_failure_context", {})
     safe_context = {key: value for key, value in context.items()
                     if key in {"source_id", "fetch_method", "article_id", "batch_index", "batch_article_ids",
-                               "model", "request_id", "token_usage", "local_repair_triggered", "fallback"}}
+                               "model", "request_id", "token_usage", "local_repair_triggered", "fallback",
+                               "retry_history", "model_request_failed"}}
     return {
         "failure_stage": stage,
-        "skipped_reason": f"{stage}_failed",
+        "skipped_reason": "model_request_failed" if getattr(exc, "model_request_failed", False) else f"{stage}_failed",
         "error_type": type(exc).__name__,
         "error_kind": error_kind(exc),
         "error_summary": _safe_message(exc),

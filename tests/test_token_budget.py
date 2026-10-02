@@ -53,12 +53,14 @@ class TokenBudgetTests(unittest.TestCase):
         self.assertEqual(observed.required_tokens, observed.input_tokens + 7_200 + observed.safety_tokens)
         self.assertEqual(_budget_status(12, 35_730, 40_000, observed.required_tokens, 10), "graceful_stop")
 
-    def _run_case(self, initial_count: int, per_batch_tokens: int, *, repair: bool = False, configured_budget: int = 40_000):
+    def _run_case(self, initial_count: int, per_batch_tokens: int, *, repair: bool = False,
+                  configured_budget: int = 40_000, override: int | None = None,
+                  fallback_count: int = 6):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "data").mkdir()
             initial = [article(index) for index in range(initial_count)]
-            fallback = [article(index) for index in range(initial_count, initial_count + 6)]
+            fallback = [article(index) for index in range(initial_count, initial_count + fallback_count)]
             store = ArticleStore(root / "data" / "ai_daily.sqlite3")
             for value in initial + fallback:
                 store.add(value)
@@ -113,7 +115,7 @@ class TokenBudgetTests(unittest.TestCase):
                  patch("ai_daily_pipeline.enrich._build_enrichment", side_effect=lambda _item, value, _model, stamp: enrichment(value, stamp)), \
                  patch("ai_daily_pipeline.enrich.DeepSeekClient") as client:
                 client.return_value.complete_json.side_effect = complete
-                result = run_enrichment(root, now=NOW)
+                result = run_enrichment(root, now=NOW, token_budget_override=override)
                 calls = client.return_value.complete_json.call_count
             status = json.loads((root / "data" / "supply-status.json").read_text(encoding="utf-8"))
             output = json.loads(result.output_path.read_text(encoding="utf-8")) if result.output_path else None
@@ -132,6 +134,17 @@ class TokenBudgetTests(unittest.TestCase):
         self.assertEqual(report["article_count"], 14)
         self.assertEqual(report["supply"]["target_count"], 14)
         self.assertEqual(calls, 3)
+
+    def test_one_process_override_does_not_raise_default_budget(self):
+        result, status, _output, report, calls = self._run_case(14, 17_500, override=80_000)
+        self.assertEqual(result.saved, 14)
+        self.assertEqual(status["token_budget"], 80_000)
+        self.assertEqual(status["token_used"], 52_500)
+        self.assertEqual(report["article_count"], 14)
+        self.assertEqual(calls, 3)
+        default_result, default_status, _output, _report, default_calls = self._run_case(14, 17_500)
+        self.assertEqual(default_status["token_budget"], 40_000)
+        self.assertLess(default_calls, calls)
 
     def test_twelve_stories_publish_when_next_batch_is_unsafe(self):
         result, status, output, report, calls = self._run_case(12, 15_000)

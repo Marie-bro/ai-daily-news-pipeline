@@ -81,5 +81,20 @@ powershell -ExecutionPolicy Bypass -File .\deploy\install-phase6.5-worker-task.p
 
 ## 阶段边界
 
+### DeepSeek 网络路径（P0-1）
+
+DeepSeek API 默认使用独立直连路径，不读取 Windows/Clash 系统代理；不影响资讯抓取、部署、飞书或 Worker 的网络路径。保留 urllib 和 HTTPS 证书/主机名验证，每个 attempt 创建新连接，最多 3 次请求，退避仍为 2 秒、5 秒。
+
+可通过当前进程环境变量指定网络配置，不写入 Prompt 或来源配置：
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `DEEPSEEK_PROXY_MODE` | `direct` | `direct` 不使用代理；`system` 使用 urllib 自动代理；`explicit` 使用指定代理 |
+| `DEEPSEEK_PROXY_URL` | 空 | 仅 `explicit` 使用，HTTP(S) 代理 URL；不要把含凭据的 URL 写入日志 |
+| `DEEPSEEK_CONNECT_TIMEOUT_SECONDS` | `15` | TCP、代理 CONNECT、TLS 建连阶段超时 |
+| `DEEPSEEK_READ_TIMEOUT_SECONDS` | `90` | TLS 建立后 socket 读写等待超时，不是完整响应总时长 |
+
+既有 request attempt 日志新增 request_id、start_time、payload_bytes、article_count、clean_text_chars、proxy_mode、failure_phase、response_headers_received、response_body_started。DNS、TCP、代理 CONNECT、TLS、请求头/请求体、响应头/响应体均有明确阶段；旧运行缺失的阶段和字节数不能倒推。只有获得完整响应和实际 usage 后，现有调用方才记录 Token；网络中断时服务端是否已经处理请求仍可能无法判断。
+
 本项目尚未实现 Phase 7 IELTS、Token Dashboard、多 Agent、MCP 或模型供应商切换。
 
