@@ -27,6 +27,7 @@ from .pipeline import run_collection
 from .publish import PublishError, publish_latest_report
 from .store import ArticleStore
 from .run_audit import RunAudit
+from .exit_status import delivery_exit_outcome, exception_exit_outcome
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 FORMAL_BASE_URL = "https://news.mariespace.cn/"
@@ -333,6 +334,11 @@ def target_from_existing_settings(pipeline_root: Path) -> tuple[object, str, str
 
 
 def append_run_log(pipeline_root: Path, record: dict[str, object]) -> None:
+    if "exit_code" not in record:
+        outcome = delivery_exit_outcome(DeliveryResult(
+            str(record["run_date"]), None, str(record.get("feishu_send_result") or "skipped"),
+            record.get("skipped_reason"), record.get("message_id"), record.get("report_url"), int(record.get("retry_count", 0))))
+        record.update(outcome.audit_fields())
     path = pipeline_root / DELIVERY_LOG
     path.parent.mkdir(parents=True, exist_ok=True)
     safe = {key: value for key, value in record.items() if key not in {"access_token", "app_secret", "api_key"}}
@@ -512,19 +518,27 @@ def _run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool
 
 def run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool = False, now: datetime | None = None,
                            token_budget_override: int | None = None) -> DeliveryResult:
+    """Preserve the production path; record a separate, best-effort audit beside existing logs."""
     audit = RunAudit(pipeline_root, _now(now))
     result = None
+    outcome = None
     try:
         result = _run_scheduled_delivery(pipeline_root, site_root, force=force, now=now, audit=audit,
                                          token_budget_override=token_budget_override)
+        outcome = delivery_exit_outcome(result)
         return result
+    except Exception as exc:
+        outcome = exception_exit_outcome(exc)
+        raise
     finally:
         try:
-            audit.save(status=result.status if result else "unhandled_failure",
+            audit.save(status=outcome.final_status,
+                       exit_code=int(outcome.code), exit_reason=outcome.reason,
+                       delivery_status=result.status if result else "unhandled_failure",
                        report_url=result.url if result else None,
                        report_id=result.report_id if result else None,
                        feishu_send_result=result.status if result and result.status in {"sent", "uncertain"} else "not_sent",
                        message_id=result.message_id if result else None,
                        skipped_reason=result.reason if result else "unhandled_failure")
         except Exception:
-            pass  # Audit remains best-effort and cannot change delivery outcome.
+            pass  # Audit serialization/I/O never changes a publication or send decision.

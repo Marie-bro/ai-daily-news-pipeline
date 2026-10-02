@@ -14,6 +14,7 @@ from html import escape
 from urllib.parse import urlparse
 
 from .text import article_id
+from .exit_status import validate_exit_audit
 
 
 def write_viewer(json_path: Path, data: dict) -> Path:
@@ -170,6 +171,8 @@ class RunAudit:
             self.event(item, "model_request", "kept", "submitted", {"batch_index": batch_index})
 
     def save(self, status=None, **metrics):
+        if "exit_code" in metrics:
+            validate_exit_audit(status, metrics["exit_code"])
         if status is not None:
             self.final_status = status
         self.metrics.update(metrics)
@@ -192,6 +195,7 @@ class RunAudit:
                 "sources": sources, "metrics": self.metrics, "flows": self.flows, "drop_reasons": [
                     {"stage": stage, "reason": reason, "count": count} for (stage, reason), count in sorted(reasons.items())],
                 "final_status": self.final_status,
+                "exit_code": self.metrics.get("exit_code"), "exit_reason": self.metrics.get("exit_reason"),
                 "articles": sorted(traces, key=lambda t: t["trace_id"])}
         dest = self.root / "data" / "run-audits"
         dest.mkdir(parents=True, exist_ok=True)

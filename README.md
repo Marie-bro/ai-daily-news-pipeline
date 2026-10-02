@@ -81,6 +81,28 @@ powershell -ExecutionPolicy Bypass -File .\deploy\install-phase6.5-worker-task.p
 
 ## 阶段边界
 
+### Windows 计划任务退出码（P1-1）
+
+退出码统一定义在 `ai_daily_pipeline/exit_status.py`，由 Python 主入口和 Run Audit 复用。`run_daily_delivery.py` 根据最终业务结果执行 `sys.exit(main())`；生产 CMD 在 Python 结束后立即保存 `%ERRORLEVEL%`，通过 `endlocal & exit /b %RADAR_EXIT_CODE%` 原样返回 Task Scheduler，不依赖是否抛出异常。
+
+| 退出码 | 语义 |
+| --- | --- |
+| 0 | 成功发送（含 normal / graceful_degraded / minimal_daily），或明确安全的幂等跳过、dry-run、只校验成功 |
+| 1 | 未分类失败、没有可发布内容或未知状态 |
+| 2 | 采集 / normalization 失败 |
+| 3 | enrichment / 模型请求失败 |
+| 4 | Token 预算耗尽且没有可发布内容 |
+| 5 | 发布 / Git 部署失败 |
+| 6 | 正式 H5 / JSON readiness 失败 |
+| 7 | 飞书发送失败或结果不确定 |
+| 8 | validation 阶段失败 |
+| 9 | persistence 阶段失败 |
+| 10 | CLI 参数错误 |
+
+正式运行 Audit 顶层记录 `final_status`、`exit_code`、`exit_reason`，并保留 `metrics.delivery_status` 原始业务返回状态；既有 delivery 日志也记录退出分类。`daily_success` / `normal_skip` 对应 0，`daily_failed` 对应非 0；未知 skip 不视为成功。历史 Audit 不重写。Audit 写入仍为现有 best-effort 行为，写入失败不会把业务失败转成成功退出。
+
+退出码属于应用语义，不是 Windows 系统错误码；启动器或操作系统本身无法启动 Python 时，CMD 仍原样传递其结果。本地测试用隔离的 `py.exe` stub 验证真实 CMD，并用无触发器临时任务验证 Scheduler Result，绝不调用真实日报。
+
 ### 正式发布 readiness（P0-2）
 
 本地发布先写入 `data/daily/ai/YYYY-MM-DD.json` 和 `data/reports.json`，再提交、推送站点仓库。`git push` 成功只表示远端 Git 已接受提交，不表示 EdgeOne 已部署完成；当前不获取 EdgeOne deployment ID / status，审计明确保留 `null` / `unknown`。

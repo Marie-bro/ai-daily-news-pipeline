@@ -54,12 +54,40 @@ class ScheduledFailureObservabilityTests(unittest.TestCase):
                  patch("ai_daily_pipeline.delivery.send_existing_report") as sender:
                 collect.return_value = SimpleNamespace(accepted=0, inserted=0)
                 enrich.return_value = SimpleNamespace(candidates=0, saved=0, output_path=None, token_budget_status="normal")
-                runpy.run_path(str(script), run_name="__main__")
+                with self.assertRaises(SystemExit) as exit_result:
+                    runpy.run_path(str(script), run_name="__main__")
+                self.assertEqual(exit_result.exception.code, 1)
             scheduler.assert_called_once()
             self.assertEqual(collect.call_args.args, (root,))
             self.assertFalse(collect.call_args.kwargs["dry_run"])
             self.assertIsNotNone(collect.call_args.kwargs["audit"])
             publish.assert_not_called()
+            sender.assert_not_called()
+
+    def test_scheduled_cli_passes_one_run_budget_override_without_sending(self):
+        script = Path(__file__).resolve().parents[1] / "run_daily_delivery.py"
+        with patch.object(sys, "argv", [str(script), "--scheduled", "--token-budget-override", "80000"]), \
+             patch("ai_daily_pipeline.delivery.run_scheduled_delivery") as scheduler:
+            scheduler.return_value = SimpleNamespace(status="skipped", report_date="2026-09-29",
+                                                      url=None, message_id=None, reason="test", retry_count=0)
+            with self.assertRaises(SystemExit) as exit_result:
+                runpy.run_path(str(script), run_name="__main__")
+            self.assertEqual(exit_result.exception.code, 1)
+        scheduler.assert_called_once()
+        self.assertEqual(scheduler.call_args.kwargs, {"token_budget_override": 80_000})
+
+    def test_scheduled_override_reaches_enrichment_only(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("ai_daily_pipeline.delivery.run_collection", autospec=run_collection) as collect, \
+                 patch("ai_daily_pipeline.delivery.run_enrichment") as enrich, \
+                 patch("ai_daily_pipeline.delivery.send_existing_report") as sender:
+                collect.return_value = SimpleNamespace(accepted=0, inserted=0)
+                enrich.return_value = SimpleNamespace(candidates=0, saved=0, output_path=None, token_budget_status="normal")
+                run_scheduled_delivery(root, root / "site", now=NOW, token_budget_override=80_000)
+            self.assertFalse(collect.call_args.kwargs["dry_run"])
+            self.assertNotIn("token_budget_override", collect.call_args.kwargs)
+            self.assertEqual(enrich.call_args.kwargs["token_budget_override"], 80_000)
             sender.assert_not_called()
 
     def _run(self, collection_error=None, enrichment_error=None):
