@@ -15,7 +15,8 @@ from .bilingual import BilingualValidationError, normalize_fact_schema, validate
 from .models import Article, Enrichment
 from .sources import BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS, TECH_CATEGORIES
 from .store import ArticleStore
-from .supply import policy, select, history, same_event, deep_read
+from .supply import policy, select, history, same_event, deep_read, level
+from .supply_lock import select_locked, PRIORITY, assert_today_lock
 
 TASK_NAME = "phase5_5_bilingual_tech_daily"
 
@@ -255,10 +256,12 @@ def _eligible_content(article: Article) -> bool:
             and not BLOCKED_CONTENT_TERMS.search(article.title + " " + article.clean_text[:3_000]))
 
 
-def _dedupe_events(items: list[Enrichment]) -> list[Enrichment]:
-    """Keep one highest-value rendering when multiple sources describe the same event."""
+def _dedupe_events(items: list[Enrichment], metadata=None) -> list[Enrichment]:
+    """Supply priority wins between layers; importance only ranks within a layer."""
     selected: list[Enrichment] = []
-    for item in sorted(items, key=lambda value: value.importance_score, reverse=True):
+    for item in sorted(items, key=lambda value: (
+            PRIORITY.get((metadata or {}).get(value.article_id, {}).get("supply_layer"), 0),
+            -value.importance_score)):
         if any(same_event(item.title_cn, other.title_cn) and same_event(item.title_en, other.title_en)
                for other in selected):
             continue
@@ -308,10 +311,16 @@ def _daily_mode(publishable_count: int, normal_minimum: int) -> str:
     return "minimal_daily" if publishable_count >= 1 else "true_failure"
 
 
-def _ready_selection(inventory: list[Article], all_enriched: dict[str, Enrichment], now: datetime, rules: dict[str, object], past: list[dict[str, object]], limit: int) -> tuple[list[Enrichment], dict[str, dict[str, object]], dict[str, object]]:
+def _ready_selection(inventory: list[Article], all_enriched: dict[str, Enrichment], now: datetime, rules: dict[str, object], past: list[dict[str, object]], limit: int, reserve=None, on_decision=None, cache_ids=None) -> tuple[list[Enrichment], dict[str, dict[str, object]], dict[str, object]]:
     ready = [replace(article, category=all_enriched[article.id].category) for article in inventory if article.id in all_enriched]
-    final, metadata, diagnostics = select(ready, now, rules, past, all_enriched, limit=limit)
-    return _dedupe_events([all_enriched[article.id] for article in final]), metadata, diagnostics
+    def duplicate(a, b):
+        left, right = all_enriched[a.id], all_enriched[b.id]
+        return same_event(left.title_cn, right.title_cn) and same_event(left.title_en, right.title_en)
+    final, metadata, diagnostics = select_locked(ready, now, rules, past, all_enriched, limit=limit,
+        reserve=reserve, on_decision=on_decision, bilingual_duplicate=duplicate, cache_ids=cache_ids)
+    items = _dedupe_events([all_enriched[article.id] for article in final], metadata)
+    assert_today_lock(diagnostics["locked_today_ids"], [item.article_id for item in items])
+    return items, metadata, diagnostics
 
 
 def _record_attempted_as_history(past: list[dict[str, object]], articles: list[Article]) -> list[dict[str, object]]:
@@ -410,7 +419,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
         observed_input_ratio = 0.0
         token_budget_status = "normal"
         stopped_reason: str | None = None
-        publishable, metadata, diagnostics = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit)
+        publishable, metadata, diagnostics = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit, cache_ids=cached)
         budget_metadata: dict[str, object] = {}
         active_batch_context: dict[str, object] = {}
         last_failure: dict[str, object] | None = None
@@ -461,8 +470,10 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
             def on_final_decision(article, stage, status, reason, detail):
                 audit.event(article, "final_" + stage, status, reason, detail)
                 if status == "dropped": final_drops[article.id] = (reason, detail)
-            selected, _, _ = select(ready, now, rules, past, all_enriched, limit=daily_limit,
-                on_decision=on_final_decision)
+            _, _, final_diag = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit,
+                on_decision=on_final_decision, cache_ids=cached)
+            audit.metrics.update(final_diag)
+            selected = [article for article in ready if article.id in final_diag["final_ids"]]
             pre_dedup = [all_enriched[a.id] for a in selected]
             published_ids = {e.article_id for e in publishable}
             for enrichment in pre_dedup:
@@ -637,7 +648,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                     for article in articles: audit.event(article, "token_budget", "dropped", token_budget_status, {"batch_index": batch_counter})
                 if completed:
                     batches_completed += 1
-                    publishable, metadata, diagnostics = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit)
+                    publishable, metadata, diagnostics = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit, cache_ids=cached)
                     update_budget_metadata()
                 persist_audit()
                 return completed
@@ -710,10 +721,15 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                         raise
 
         for offset in range(0, len(initial_articles), model_batch_size):
+            if diagnostics.get("today_locked", 0) >= rules["minimum"] and not any(
+                    level(a, now) in (1, 2)
+                    for a in initial_articles[offset:]):
+                break  # Ten to thirteen qualified Today stories need no historical supplement.
             if not process_batch(initial_articles[offset:offset + model_batch_size], fallback=False):
                 break
         # Work toward the target using untouched real candidates; quality gates and the hard maximum remain unchanged.
-        while not fill_context["fill_stopped"] and token_budget_status == "normal" and len(publishable) < rules["target"]:
+        while (not fill_context["fill_stopped"] and token_budget_status == "normal"
+               and len(publishable) < rules["target"] and diagnostics.get("today_locked", 0) < rules["minimum"]):
             fallback_history = _record_attempted_as_history(past, attempted)
             fallback_chosen, _, _ = select(inventory, now, rules, fallback_history, cached, limit=daily_limit)
             fallback_articles = [article for article in fallback_chosen if article.id not in all_enriched and article.id not in {item.id for item in attempted}]

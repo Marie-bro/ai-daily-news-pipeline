@@ -40,7 +40,7 @@ def history(site_root, now):
     items = []
     for path in (site_root / "data/daily/ai").glob("*.json"):
         report = json.loads(path.read_text(encoding="utf-8"))
-        if report.get("report_date", "9999") < now.astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat():
+        if report.get("report_date", "9999") <= now.astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat():
             items.extend(report.get("items", []))
     return items
 
@@ -55,7 +55,7 @@ def level(article, now):
     if age <= 168 and deep_read(article): return 4
     return None
 
-def select(articles, now, rules, past=(), enrichments=None, limit=None, on_decision=None):
+def select(articles, now, rules, past=(), enrichments=None, limit=None, on_decision=None, supply_layers=None):
     enrichments = enrichments or {}
     urls = {normalized_url(x["original_url"]) for x in past}
     titles = [x.get("title_original", x.get("title_en", "")) for x in past]
@@ -67,6 +67,8 @@ def select(articles, now, rules, past=(), enrichments=None, limit=None, on_decis
             on_decision(article, stage, status, reason, detail or {})
     for a in articles:
         stage = level(a, now)
+        if supply_layers and supply_layers.get(a.id) in {"deep_read", "evergreen"}:
+            stage = 4  # Only prevalidated Reserve metadata may extend the historical window.
         if not editorial_candidate(a):
             emit(a, "quality_filter", "dropped", "editorial_exclusion")
             continue

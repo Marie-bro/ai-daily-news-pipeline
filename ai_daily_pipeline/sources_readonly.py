@@ -165,6 +165,14 @@ def _article(row: dict, sqlite_row: dict | None, origin: str) -> dict:
     row_id = row.get("article_id") or row.get("id") or row.get("trace_id")
     sqlite_row = sqlite_row or {}
     events = row.get("events") if isinstance(row.get("events"), list) else []
+    supply = {}
+    for event in events:
+        detail = event.get("detail") or {}
+        for field in ("supply_layer", "is_today", "locked_today", "selected_as_fallback",
+                      "fallback_priority", "historical_age_days", "reserve_status", "reserve_type",
+                      "reserve_reason", "policy_validity", "deep_read", "cache_reused"):
+            if field in detail:
+                supply[field] = detail[field]
     if origin == "offline":
         historical_names = {"collected": "collection", "normalized": "normalization"}
         stages = {stage: _normalize_status(row.get(historical_names.get(stage, stage))) for stage in _STAGES}
@@ -198,6 +206,7 @@ def _article(row: dict, sqlite_row: dict | None, origin: str) -> dict:
         "final_status": row.get("screening_status") or row.get("final_status") or UNAVAILABLE,
         "reason": reason or UNAVAILABLE,
         "events": events,
+        "supply": supply,
         "trace_provenance": "recorded" if origin == "audit" else "historical_offline_reconstruction" if origin == "offline" else "collection_snapshot_only",
     }
 

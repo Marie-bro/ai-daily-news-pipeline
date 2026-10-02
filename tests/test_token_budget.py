@@ -74,7 +74,7 @@ class TokenBudgetTests(unittest.TestCase):
                 select_calls += 1
                 return (initial if select_calls == 1 else fallback), {}, {}
 
-            def ready(_inventory, accepted, _now, _rules, _past, _limit):
+            def ready(_inventory, accepted, _now, _rules, _past, _limit, **_selection_context):
                 items = list(accepted.values())
                 return items, {item.article_id: {"channel": "technology"} for item in items}, {}
 

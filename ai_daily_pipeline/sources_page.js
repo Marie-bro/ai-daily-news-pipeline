@@ -34,6 +34,12 @@ function articleCard(article, fullTrace = false) {
    `trace_id: ${article.trace_id}`].forEach(value => meta.append(node("span", "", value)));
   if (article.source_mapping_basis !== "recorded")
     meta.append(node("span", "", `source mapping: ${article.source_mapping_basis}`));
+  if (article.supply && Object.keys(article.supply).length) {
+    const supply = node("details", "article-trace");
+    supply.append(node("summary", "", `Supply Layer: ${article.supply.supply_layer || "unavailable"}`),
+      node("pre", "", JSON.stringify(article.supply, null, 2)));
+    meta.append(supply);
+  }
   const trace = node("div", "trace");
   for (const stage of STAGES) {
     const status = article.stages[stage] || "unavailable";

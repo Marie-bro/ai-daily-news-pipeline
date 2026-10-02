@@ -1,0 +1,67 @@
+diff --git a/assets/site.js b/assets/site.js
+index c21eb72..e974a44 100644
+--- a/assets/site.js
++++ b/assets/site.js
+@@ -163,6 +163,10 @@
+     if (topPick) tags.push("Top Pick");
+     if (sectionLabels[item.section]) tags.push(sectionLabels[item.section]);
+     if (item.catch_up) tags.push("Worth Catching Up · 值得补看");
++    if (item.supply_layer && item.supply_layer !== "today") {
++      const labels = {catch_up: "Worth Catching Up · 值得补看", deep_read: "Deep Read · 深度阅读", evergreen: "Evergreen · 长期价值"};
++      tags.push(labels[item.supply_layer] || item.supply_layer);
++    }
+     return [...new Set(tags)];
+   };
+   const storyCard = (entry, report, topPick) => {
+@@ -189,7 +193,10 @@
+   };
+   const renderDashboard = (target, report) => {
+     const entries = report.items.map((item, index) => ({ item, key: articleKey(item, index) }));
+-    const ranked = [...entries].sort(storyRank);
++    const supplyPriority = {today: 0, catch_up: 1, deep_read: 2, evergreen: 3};
++    // Old archives without supply metadata preserve their existing ordering.
++    const ranked = [...entries].sort((left, right) =>
++      ((supplyPriority[left.item.supply_layer] ?? 0) - (supplyPriority[right.item.supply_layer] ?? 0)) || storyRank(left, right));
+     const top = ranked.slice(0, Math.min(5, ranked.length));
+     const topKeys = new Set(top.map((entry) => entry.key));
+     const more = ranked.filter((entry) => !topKeys.has(entry.key));
+diff --git a/tests/test_dashboard_browser.py b/tests/test_dashboard_browser.py
+index 1c99cf7..277ea11 100644
+--- a/tests/test_dashboard_browser.py
++++ b/tests/test_dashboard_browser.py
+@@ -4,6 +4,7 @@ import subprocess
+ import tempfile
+ import threading
+ import unittest
++from unittest.mock import patch
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ from pathlib import Path
+ from urllib.parse import urlsplit
+@@ -25,6 +26,7 @@ const probe = window.setInterval(() => {
+   const all = document.querySelectorAll('.dashboard-section:not(:first-of-type) .story-card').length;
+   document.body.dataset.cardCount = String(cards.length);
+   document.body.dataset.topCount = String(top);
++  document.body.dataset.topTitles = [...document.querySelectorAll('.dashboard-section:first-of-type .story-title')].map(node => node.textContent).join('|');
+   document.body.dataset.allCount = String(all);
+   document.body.dataset.overflow = String(document.documentElement.scrollWidth > document.documentElement.clientWidth);
+   document.body.dataset.englishCard = String([...document.querySelectorAll('.story-title')].some(node => node.textContent.includes('English title')));
+@@ -156,3 +158,19 @@ class DashboardBrowserTests(unittest.TestCase):
+                 self.assertEqual(self.attribute(html, "favorite"), "true")
+                 self.assertEqual(self.attribute(html, "detail-order"), "true")
+                 self.assertEqual(self.attribute(html, "overflow"), "false")
++
++    def test_today_top_picks_precede_higher_importance_history(self):
++        saved_report = report
++        def mixed(count):
++            payload = saved_report(count)
++            for index, item in enumerate(payload['items']):
++                item['supply_layer'] = 'today' if index < 3 else 'evergreen'
++                item['importance_score'] = 60 if index < 3 else 99
++            return payload
++        with patch(__name__ + '.report', side_effect=mixed):
++            for width in (390, 800, 1280):
++                html = self.dump('/', width, 14)
++                titles = self.attribute(html, 'top-titles').split('|')
++                for title in ('中文科技标题 1', '中文科技标题 2', '中文科技标题 3'):
++                    self.assertIn(title, titles)
++                self.assertEqual(self.attribute(html, 'overflow'), 'false')
