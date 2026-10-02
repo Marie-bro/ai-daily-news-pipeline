@@ -97,16 +97,21 @@ def publish_latest_report(pipeline_root: Path, site_root: Path) -> Path:
     report_date = published_at.date().isoformat()
     reading_minutes = _reading_minutes(items)
     highlights = [str(item.get("title_cn", "")) for item in items[:3] if str(item.get("title_cn", "")).strip()]
+    supply = latest.get("supply") if isinstance(latest.get("supply"), dict) else {}
+    daily_mode = supply.get("daily_mode", "normal")
+    if daily_mode not in {"normal", "graceful_degraded", "minimal_daily"}:
+        raise PublishError("The enrichment output has an invalid daily mode")
     report = {
         "schema_version": schema_version,
         "category": "radar" if schema_version >= 3 else "tech" if schema_version >= 2 else "ai",
         "report_date": report_date,
         "published_at": published_at.isoformat(),
         "article_count": len(items),
+        "daily_mode": daily_mode,
         "estimated_reading_minutes": reading_minutes,
         "highlights": highlights,
         "items": items,
-        "supply": latest.get("supply", {}),
+        "supply": supply,
     }
     index_path = site_root / "data" / "reports.json"
     existing = _read_json(index_path) if index_path.exists() else {"reports": []}
@@ -117,6 +122,7 @@ def publish_latest_report(pipeline_root: Path, site_root: Path) -> Path:
         "category": "radar" if schema_version >= 3 else "tech" if schema_version >= 2 else "ai", "schema_version": schema_version,
         "report_date": report_date, "published_at": published_at.isoformat(),
         "article_count": len(items), "estimated_reading_minutes": reading_minutes, "highlights": highlights,
+        "daily_mode": daily_mode,
     }
     reports = [entry for entry in previous if not (isinstance(entry, dict) and entry.get("report_date") == report_date)]
     reports.append(summary)

@@ -296,7 +296,16 @@ def _estimate_request_tokens(system: str, prompt: str, output_limit: int, observ
 def _budget_status(accepted_count: int, token_used: int, token_budget: int, next_required: int, minimum: int) -> str:
     if token_used + next_required <= token_budget:
         return "normal"
-    return "graceful_stop" if accepted_count >= minimum else "exhausted_before_minimum"
+    # The configured minimum still defines a normal-sized edition; it is no longer a publication gate.
+    return "graceful_stop" if accepted_count >= 1 else "exhausted_before_minimum"
+
+
+def _daily_mode(publishable_count: int, normal_minimum: int) -> str:
+    if publishable_count >= normal_minimum:
+        return "normal"
+    if publishable_count >= 5:
+        return "graceful_degraded"
+    return "minimal_daily" if publishable_count >= 1 else "true_failure"
 
 
 def _ready_selection(inventory: list[Article], all_enriched: dict[str, Enrichment], now: datetime, rules: dict[str, object], past: list[dict[str, object]], limit: int) -> tuple[list[Enrichment], dict[str, dict[str, object]], dict[str, object]]:
@@ -367,6 +376,14 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
         initial_articles = [article for article in chosen if article.id not in cached]
         if not chosen:
             selection_diagnostics["minimum_not_met_reason"] = "no source-verified candidates passed the existing supply policy"
+            selection_diagnostics.update({"daily_mode": "true_failure", "daily_status": "true_failure",
+                                          "publishable_count": 0, "target_count": rules["target"],
+                                          "degraded_reason": "no_eligible_candidates", "token_guard_triggered": False,
+                                          "source_shortage": True, "validation_shortage": False})
+            if audit:
+                audit.metrics.update({key: selection_diagnostics[key] for key in
+                                      ("daily_mode", "publishable_count", "target_count", "degraded_reason",
+                                       "token_guard_triggered", "source_shortage", "validation_shortage")})
             (data_dir / "supply-status.json").write_text(json.dumps(selection_diagnostics, indent=2), encoding="utf-8")
             return EnrichmentResult(0, 0, None, {}, None)
 
@@ -644,16 +661,32 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
         diagnostics.update(budget_metadata)
         diagnostics["selected"] = len(publishable)
         diagnostics["shortfall"] = max(0, rules["minimum"] - len(publishable))
-        if token_budget_status == "exhausted_before_minimum":
-            diagnostics["daily_status"] = "daily_failed"
+        daily_mode = _daily_mode(len(publishable), rules["minimum"])
+        source_shortage = len(chosen) < rules["minimum"]
+        validation_shortage = (len(publishable) < rules["minimum"]
+                               and stats["hard_fact_rejected"] + stats["semantic_rejected"] > 0)
+        degraded_reason = (None if daily_mode == "normal" else
+                           "token_budget_insufficient_for_next_batch" if token_budget_status != "normal" else
+                           "eligible_candidate_shortage" if source_shortage else
+                           "validation_rejections" if validation_shortage else
+                           "final_selection_shortfall")
+        diagnostics.update({"daily_mode": daily_mode, "daily_status": daily_mode,
+                            "publishable_count": len(publishable), "target_count": rules["target"],
+                            "degraded_reason": degraded_reason,
+                            "token_guard_triggered": token_budget_status != "normal",
+                            "source_shortage": source_shortage, "validation_shortage": validation_shortage})
+        if token_budget_status != "normal" and not stats["minimum_met"]:
             diagnostics["minimum_not_met_reason"] = "token_budget_exhausted"
         elif not stats["minimum_met"]:
             diagnostics["minimum_not_met_reason"] = "all eligible, source-verified candidates were exhausted after fact-schema validation"
         total_usage = _usage_total(usages) if usages else {}
+        if audit:
+            audit.metrics.update({key: diagnostics[key] for key in ("daily_mode", "publishable_count", "target_count",
+                                  "degraded_reason", "token_guard_triggered", "source_shortage", "validation_shortage")})
         record_final_audit()
         persist_audit()
         (data_dir / "supply-status.json").write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
-        if not publishable or token_budget_status == "exhausted_before_minimum":
+        if not publishable:
             return EnrichmentResult(len(attempted), 0, model, total_usage, None, token_budget_status,
                                     diagnostics.get("minimum_not_met_reason"))
         output_path.write_text(json.dumps({
@@ -661,6 +694,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
             "supply": diagnostics,
             "items": [{**enrichment.to_dict(), **metadata[enrichment.article_id]} for enrichment in publishable],
         }, ensure_ascii=False, indent=2), encoding="utf-8")
-        return EnrichmentResult(len(attempted), len(publishable), model, total_usage, output_path, token_budget_status)
+        return EnrichmentResult(len(attempted), len(publishable), model, total_usage, output_path,
+                                token_budget_status, diagnostics.get("minimum_not_met_reason"))
     finally:
         store.close()

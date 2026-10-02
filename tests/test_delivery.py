@@ -103,6 +103,14 @@ class DeliveryTests(unittest.TestCase):
         self.assertNotIn("what_happened_en", content)
         self.assertNotIn("original_url", content)
 
+    def test_degraded_cards_use_simple_user_facing_titles(self):
+        report = {"report_date": DATE, "article_count": 1, "estimated_reading_minutes": 5, "items": [ITEM]}
+        report["daily_mode"] = "graceful_degraded"
+        self.assertEqual(card_for_report(report, daily_url(DATE))["header"]["title"]["content"],
+                         "MarieSpace Radar · Compact Edition\nMarieSpace 每日雷达 · 精简版")
+        report["daily_mode"] = "minimal_daily"
+        self.assertEqual(card_for_report(report, daily_url(DATE))["header"]["title"]["content"],
+                         "MarieSpace Today's Watch\nMarieSpace 今日观察")
 
     def test_delayed_json_readiness_sends_only_after_both_urls_work(self):
         with TemporaryDirectory() as directory:

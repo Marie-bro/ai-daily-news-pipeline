@@ -278,4 +278,4 @@ class EnrichmentTests(unittest.TestCase):
             self.assertEqual(result.minimum_not_met_reason, "token_budget_exhausted")
             self.assertIsNone(result.output_path)
             status = json.loads((root / "data" / "supply-status.json").read_text(encoding="utf-8"))
-            self.assertEqual(status["daily_status"], "daily_failed")
+            self.assertEqual(status["daily_status"], "true_failure")

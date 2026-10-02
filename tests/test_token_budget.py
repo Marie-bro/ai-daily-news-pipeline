@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from ai_daily_pipeline.bilingual import BilingualValidationError
 from ai_daily_pipeline.enrich import (
-    ItemValidation, _budget_status, _estimate_request_tokens, run_enrichment,
+    ItemValidation, _budget_status, _daily_mode, _estimate_request_tokens, run_enrichment,
 )
 from ai_daily_pipeline.models import Article, Enrichment
 from ai_daily_pipeline.publish import publish_latest_report
@@ -43,7 +43,8 @@ class TokenBudgetTests(unittest.TestCase):
     def test_exact_limit_is_allowed_but_one_token_over_stops(self):
         self.assertEqual(_budget_status(10, 35_000, 40_000, 5_000, 10), "normal")
         self.assertEqual(_budget_status(10, 35_001, 40_000, 5_000, 10), "graceful_stop")
-        self.assertEqual(_budget_status(9, 35_001, 40_000, 5_000, 10), "exhausted_before_minimum")
+        self.assertEqual(_budget_status(9, 35_001, 40_000, 5_000, 10), "graceful_stop")
+        self.assertEqual(_budget_status(0, 35_001, 40_000, 5_000, 10), "exhausted_before_minimum")
 
     def test_estimator_reserves_output_and_safety_and_respects_observed_input(self):
         baseline = _estimate_request_tokens("system", "candidate" * 100, 7_200)
@@ -170,15 +171,42 @@ class TokenBudgetTests(unittest.TestCase):
         self.assertEqual(result.token_budget_status, "graceful_stop")
         self.assertEqual(report["article_count"], 12)
 
-    def test_nine_stories_fail_without_overwriting_or_publishing(self):
+    def test_nine_stories_publish_when_token_guard_stops_fallback(self):
         result, status, output, report, calls = self._run_case(9, 18_000)
-        self.assertEqual(result.saved, 0)
-        self.assertEqual(result.token_budget_status, "exhausted_before_minimum")
-        self.assertEqual(status["daily_status"], "daily_failed")
+        self.assertEqual(result.saved, 9)
+        self.assertEqual(result.token_budget_status, "graceful_stop")
+        self.assertEqual(status["daily_mode"], "graceful_degraded")
         self.assertEqual(status["accepted_count"], 9)
         self.assertEqual(status["minimum_not_met_reason"], "token_budget_exhausted")
-        self.assertIsNone(output)
-        self.assertIsNone(report)
+        self.assertIsNotNone(output)
+        self.assertEqual(report["article_count"], 9)
+        self.assertEqual(calls, 2)
+
+    def test_all_daily_modes_publish_only_real_qualified_items(self):
+        for count, expected in ((14, "normal"), (10, "normal"), (9, "graceful_degraded"),
+                                (5, "graceful_degraded"), (4, "minimal_daily"),
+                                (1, "minimal_daily"), (0, "true_failure")):
+            with self.subTest(count=count):
+                result, status, output, report, _calls = self._run_case(count, 5_000, fallback_count=0)
+                self.assertEqual(status["daily_mode"], expected)
+                self.assertEqual(status["publishable_count"], count)
+                self.assertEqual(status["target_count"], 14)
+                self.assertEqual(result.saved, count)
+                if count:
+                    self.assertEqual(report["article_count"], count)
+                    self.assertEqual(report["daily_mode"], expected)
+                    self.assertEqual(output["supply"]["daily_mode"], expected)
+                else:
+                    self.assertIsNone(output)
+                    self.assertIsNone(report)
+
+    def test_seven_stories_publish_on_token_guard(self):
+        result, status, output, report, calls = self._run_case(7, 18_000)
+        self.assertEqual(result.saved, 7)
+        self.assertEqual(status["token_budget_status"], "graceful_stop")
+        self.assertTrue(status["token_guard_triggered"])
+        self.assertEqual(status["daily_mode"], "graceful_degraded")
+        self.assertEqual(report["article_count"], 7)
         self.assertEqual(calls, 2)
 
     def test_local_repair_usage_counts_before_next_batch(self):

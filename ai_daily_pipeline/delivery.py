@@ -124,6 +124,9 @@ def card_for_report(report: dict[str, object], url: str) -> dict[str, object]:
     date = str(report["report_date"])
     stories = int(report["article_count"])
     minutes = int(report["estimated_reading_minutes"])
+    card_title = {"graceful_degraded": "MarieSpace Radar · Compact Edition\nMarieSpace 每日雷达 · 精简版",
+                  "minimal_daily": "MarieSpace Today's Watch\nMarieSpace 今日观察"}.get(
+                      report.get("daily_mode"), "MarieSpace Radar\nMarieSpace 每日雷达")
     elements: list[dict[str, object]] = [
         {"tag": "markdown", "content": f"**{date}**\n{stories} stories \u00b7 {minutes} min read\n{stories} \u6761\u8d44\u8baf \u00b7 \u9884\u8ba1\u9605\u8bfb {minutes} \u5206\u949f"},
         {"tag": "markdown", "content": "**Today's highlights**\n**\u4eca\u65e5\u79d1\u6280\u91cd\u70b9**"},
@@ -151,7 +154,7 @@ def card_for_report(report: dict[str, object], url: str) -> dict[str, object]:
     })
     return {
         "config": {"wide_screen_mode": True},
-        "header": {"template": "blue", "title": {"tag": "plain_text", "content": "MarieSpace Radar\nMarieSpace \u6bcf\u65e5\u96f7\u8fbe"}},
+        "header": {"template": "blue", "title": {"tag": "plain_text", "content": card_title}},
         "elements": elements,
     }
 
@@ -368,7 +371,7 @@ def send_existing_report(pipeline_root: Path, site_root: Path, report_date: str,
         identifier = report_id(report)
         url = daily_url(report_date)
         record.update({"candidate_count": report["article_count"], "selected_count": report["article_count"], "report_generated": True,
-                       "report_url": url})
+                       "report_url": url, "daily_mode": report.get("daily_mode", "normal")})
         card = card_for_report(report, url)
         if dry_run or send_dry_run:
             record["skipped_reason"] = "dry_run" if dry_run else "feishu_send_dry_run"
@@ -499,7 +502,8 @@ def _run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool
                   "candidate_count": enrichment.candidates, "selected_count": 0, "report_generated": False, "report_url": None,
                   "url_reachable": False, "feishu_send_attempted": False, "feishu_send_result": None, "message_id": None,
                   "skipped_reason": reason, "retry_count": 0, "collection_inserted": collection.inserted,
-                  "token_budget_status": enrichment.token_budget_status}
+                  "token_budget_status": enrichment.token_budget_status, "daily_mode": "true_failure",
+                  "publishable_count": 0}
         append_run_log(pipeline_root, record)
         return DeliveryResult(current.date().isoformat(), None, "daily_failed" if budget_failed else "skipped", reason, None, None, 0)
     try:
