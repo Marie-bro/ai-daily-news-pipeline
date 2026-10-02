@@ -17,11 +17,23 @@ def classify_supply_layer(article, now, reserve=None):
     stage = level(article, now)
     if stage in (1, 2):
         return "today"
+    meta = (reserve or {}).get(article.id, {})
+    if meta:
+        if meta.get('reserve_status') != 'eligible' or not meta.get('cache_available') or meta.get('validation_status') != 'passed':
+            return None
+        age=historical_age_days(article,now)
+        layer=meta.get('supply_layer')
+        if layer=='catch_up' and 1 < age <= 3:
+            return layer
+        if layer=='deep_read' and 3 < age <= 30:
+            return layer
+        if layer=='evergreen' and 3 < age <= 365:
+            return layer
+        return None
     if stage == 3:
         return "catch_up"
     if stage == 4:
         return "deep_read"
-    meta = (reserve or {}).get(article.id, {})
     age = historical_age_days(article, now)
     if (meta.get("reserve_status") == "eligible" and meta.get("cache_available")
             and meta.get("validation_status") == "passed" and 3 < age <= 365):

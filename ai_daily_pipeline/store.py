@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .models import Article, Enrichment
+from .reserve import RESERVE_SCHEMA, decode_reserve_record, write_seed_metadata
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS articles (
@@ -114,6 +115,7 @@ class ArticleStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(path)
         self.connection.executescript(SCHEMA)
+        self.connection.executescript(RESERVE_SCHEMA)
         columns = {row[1] for row in self.connection.execute("PRAGMA table_info(model_usage)")}
         if "raw_usage_json" not in columns:
             self.connection.execute("ALTER TABLE model_usage ADD COLUMN raw_usage_json TEXT")
@@ -246,6 +248,23 @@ class ArticleStore:
                      :category,:original_language,:what_happened,:what_happened_en,:why_it_matters,:why_it_matters_en,:importance_score,:fact_schema_json)""",
             enrichment.to_record(),
         )
+
+    def reserve_inventory(self, limit: int = 100):
+        """Bounded existing cached inventory; never fetches or creates enrichment."""
+        if not 1 <= limit <= 300:
+            raise ValueError('reserve inventory limit must be 1..300')
+        cursor=self.connection.execute('SELECT a.* FROM articles a JOIN tech_enrichments e ON e.article_id=a.id '
+                                      'ORDER BY a.published_at DESC LIMIT ?', (limit,))
+        fields=[c[0] for c in cursor.description]
+        return [Article(**dict(zip(fields,row))) for row in cursor]
+
+    def reserve_metadata(self):
+        cursor=self.connection.execute('SELECT * FROM article_reserve')
+        fields=[c[0] for c in cursor.description]
+        return {row[0]:decode_reserve_record(dict(zip(fields,row))) for row in cursor}
+
+    def save_reserve_seed(self, preview):
+        write_seed_metadata(self.connection, preview)
 
     def record_usage(self, *, task: str, model: str, created_at: str, usage: dict[str, object]) -> None:
         details = usage.get("completion_tokens_details")

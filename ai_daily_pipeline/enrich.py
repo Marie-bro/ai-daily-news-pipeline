@@ -17,6 +17,7 @@ from .sources import BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS, TECH_CATEGORI
 from .store import ArticleStore
 from .supply import policy, select, history, same_event, deep_read, level
 from .supply_lock import select_locked, PRIORITY, assert_today_lock
+from .reserve import build_reserve_seed, validate_cache
 
 TASK_NAME = "phase5_5_bilingual_tech_daily"
 
@@ -353,6 +354,26 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
         rules = policy(root)
         daily_limit = int(rules["maximum"])
         inventory, cached = store.supply_inventory((now - timedelta(hours=168)).isoformat(), (now + timedelta(minutes=10)).isoformat())
+        existing_reserve = store.reserve_metadata()
+        reserve_articles = store.reserve_inventory()
+        past = history(root.parent / "ai-daily-public-site", now)
+        seed = build_reserve_seed(reserve_articles, cached, past, now, existing_reserve)
+        reserve = {row['article_id']: row for row in seed['items']}
+        known_ids = {a.id for a in inventory}
+        inventory += [a for a in reserve_articles if a.id not in known_ids
+                      and reserve.get(a.id,{}).get('reserve_status') == 'eligible']
+        validated_cache = {}
+        invalid_cache_ids = {}
+        for article in inventory:
+            if article.id in cached:
+                valid, reason = validate_cache(article, cached[article.id])
+                if valid:
+                    validated_cache[article.id] = valid
+                else:
+                    invalid_cache_ids[article.id] = reason
+                    if audit:
+                        audit.event(article,'enrichment_cache','dropped',reason)
+        cached = validated_cache
         inventory_before_content_gate = inventory
         if audit:
             audit.inventory_origin_events(inventory)
@@ -371,10 +392,23 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                               "blocked_host" if any(host == blocked or host.endswith("." + blocked) for blocked in BLOCKED_CONTENT_HOSTS) else
                               "blocked_content_terms")
                     audit.event(article, "content_gate", "dropped", reason)
-        inventory = [article for article in inventory if _eligible_content(article)]
-        past = history(root.parent / "ai-daily-public-site", now)
+        inventory = [article for article in inventory if article.id not in invalid_cache_ids and _eligible_content(article) and
+            (level(article,now) in (1,2) or (article.id in cached and reserve.get(article.id,{}).get('reserve_status')=='eligible'))]
+        if audit:
+            for article in inventory_before_content_gate:
+                if article.id in invalid_cache_ids:
+                    audit.event(article,'cache_validation','dropped',invalid_cache_ids[article.id])
+                elif level(article,now) not in (1,2) and article.id not in reserve:
+                    audit.event(article,'reserve_review','dropped','cache_missing',
+                                {'reserve_status':'pending_review','cache_reused':False})
+            audit.metrics['reserve_seed_summary'] = seed['summary']
+            for article in reserve_articles:
+                if article.id in reserve:
+                    row=reserve[article.id]
+                    audit.event(article,'reserve_review','kept' if row['reserve_status']=='eligible' else 'dropped',row['reserve_reason'],row)
         chosen, _, selection_diagnostics = select(inventory, now, rules, past, cached, limit=daily_limit,
-            on_decision=(lambda a, st, status, reason, detail: audit.event(a, "initial_" + st, status, reason, detail)) if audit else None)
+            on_decision=(lambda a, st, status, reason, detail: audit.event(a, "initial_" + st, status, reason, detail)) if audit else None,
+            supply_layers={ident:meta['supply_layer'] for ident,meta in reserve.items() if meta['reserve_status']=='eligible'})
         if audit:
             audit.inventory_sets(inventory_before_content_gate, inventory, chosen)
         if audit: audit.metrics.update({
@@ -419,7 +453,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
         observed_input_ratio = 0.0
         token_budget_status = "normal"
         stopped_reason: str | None = None
-        publishable, metadata, diagnostics = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit, cache_ids=cached)
+        publishable, metadata, diagnostics = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit, reserve=reserve, cache_ids=cached)
         budget_metadata: dict[str, object] = {}
         active_batch_context: dict[str, object] = {}
         last_failure: dict[str, object] | None = None
@@ -471,7 +505,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                 audit.event(article, "final_" + stage, status, reason, detail)
                 if status == "dropped": final_drops[article.id] = (reason, detail)
             _, _, final_diag = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit,
-                on_decision=on_final_decision, cache_ids=cached)
+                reserve=reserve, on_decision=on_final_decision, cache_ids=cached)
             audit.metrics.update(final_diag)
             selected = [article for article in ready if article.id in final_diag["final_ids"]]
             pre_dedup = [all_enriched[a.id] for a in selected]
@@ -648,7 +682,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                     for article in articles: audit.event(article, "token_budget", "dropped", token_budget_status, {"batch_index": batch_counter})
                 if completed:
                     batches_completed += 1
-                    publishable, metadata, diagnostics = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit, cache_ids=cached)
+                    publishable, metadata, diagnostics = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit, reserve=reserve, cache_ids=cached)
                     update_budget_metadata()
                 persist_audit()
                 return completed
@@ -731,7 +765,8 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
         while (not fill_context["fill_stopped"] and token_budget_status == "normal"
                and len(publishable) < rules["target"] and diagnostics.get("today_locked", 0) < rules["minimum"]):
             fallback_history = _record_attempted_as_history(past, attempted)
-            fallback_chosen, _, _ = select(inventory, now, rules, fallback_history, cached, limit=daily_limit)
+            fallback_chosen, _, _ = select(inventory, now, rules, fallback_history, cached, limit=daily_limit,
+                supply_layers={ident:meta['supply_layer'] for ident,meta in reserve.items() if meta['reserve_status']=='eligible'})
             fallback_articles = [article for article in fallback_chosen if article.id not in all_enriched and article.id not in {item.id for item in attempted}]
             if not fallback_articles:
                 break

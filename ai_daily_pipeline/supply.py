@@ -41,7 +41,9 @@ def history(site_root, now):
     for path in (site_root / "data/daily/ai").glob("*.json"):
         report = json.loads(path.read_text(encoding="utf-8"))
         if report.get("report_date", "9999") <= now.astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat():
-            items.extend(report.get("items", []))
+            items.extend({**item, "daily_report_date": report.get("report_date"),
+                          "daily_published_at": report.get("published_at")}
+                         for item in report.get("items", []))
     return items
 
 def deep_read(article):
