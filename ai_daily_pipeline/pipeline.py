@@ -53,19 +53,25 @@ def _collapse_release_bursts(articles: list[Article]) -> list[Article]:
     return sorted(others + list(selected.values()), key=lambda article: article.published_at, reverse=True)
 
 
-def _candidate_to_article(item: SourceItem, now: datetime, source: SourceDefinition) -> Article | None:
+def _candidate_to_article(item: SourceItem, now: datetime, source: SourceDefinition, audit=None) -> Article | None:
     if source.source_role == "discovery":
+        if audit: audit.event(item, "normalization", "dropped", "discovery_source")
         return None
     page = fetch(item.url, allow_hosts=source.allow_hosts)
     extracted = extract_article(page, item.title, source.cleaning)
     published = extracted.published_at or item.published_at
     if not published or not extracted.clean_text or len(extracted.clean_text) < 120:
+        if audit:
+            reason = "missing_publish_time" if not published else "missing_content" if not extracted.clean_text else "content_shorter_than_120"
+            audit.event(item, "normalization", "dropped", reason, {"has_publish_time": bool(published), "text_length": len(extracted.clean_text or "")})
         return None
     title = extracted.title or item.title
     if BLOCKED_CONTENT_TERMS.search(title + " " + extracted.clean_text[:3_000]):
+        if audit: audit.event(item, "normalization", "dropped", "blocked_content_terms")
         return None
     # Feed indexes can contain generic company posts; retain only actual technology candidates.
     if not RADAR_TERMS.search(title + " " + extracted.clean_text[:3_000]):
+        if audit: audit.event(item, "normalization", "dropped", "radar_terms_absent")
         return None
     published = published.astimezone(UTC)
     body_fingerprint = fingerprint(title, extracted.clean_text)
@@ -102,7 +108,7 @@ def check_sources(root: Path) -> list[dict[str, object]]:
     return results
 
 
-def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minimum: int = 5, maximum: int = 200) -> RunResult:
+def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minimum: int = 5, maximum: int = 200, *, audit=None) -> RunResult:
     now = (now or datetime.now(UTC)).astimezone(UTC)
     sources: list[SourceDefinition] = load_sources(root / "config" / "sources.json")
     sources_by_id = {source.source_id: source for source in sources}
@@ -115,8 +121,11 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
     try:
         for source in sources:
             try:
-                result = collect_source(source, cache)
+                result = collect_source(source, cache, on_decision=audit.parser_event) if audit else collect_source(source, cache)
                 source_items.extend(result.items)
+                if audit:
+                    audit.source(source.source_id, result.status, len(result.items), {"fetch_method": source.fetch_method})
+                    for item in result.items: audit.event(item, "collection", "kept", "parsed_source_item")
                 latest_success = cache.record_source_health(source.source_id, result.status, now.isoformat(), len(result.items)) if cache else (now.isoformat() if result.status == "ok" else None)
                 source_health.append({"source_id": source.source_id, "status": result.status,
                                       "fetch_method": source.fetch_method,
@@ -129,6 +138,7 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
                 message = f"{source.source_id}: {type(exc).__name__}: {exc}"
                 errors.append(message)
                 detail = failure_details(exc, "collection")
+                if audit: audit.source(source.source_id, "error", 0, {"fetch_method": source.fetch_method, "error_type": detail["error_type"], "error_kind": detail["error_kind"], "http_status": detail["http_status"]})
                 source_errors.append({"source_id": source.source_id, "fetch_method": source.fetch_method,
                                       "http_status": detail["http_status"], "error_type": detail["error_type"],
                                       "error_kind": detail["error_kind"], "error_summary": detail["error_summary"],
@@ -144,6 +154,12 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
         if cache:
             cache.close()
     unique_items = {item.url: item for item in source_items}
+    if audit: audit.metrics["source_unique_urls"] = len(unique_items)
+    if audit:
+        for item in source_items:
+            if unique_items[item.url] is not item:
+                audit.event(item, "source_url_dedup", "dropped", "duplicate_url", {"duplicate_of": article_id(item.url)})
+            else: audit.event(item, "source_url_dedup", "kept", "unique_url")
     ordered = sorted(
         unique_items.values(),
         key=lambda item: (-(item.published_at.timestamp() if item.published_at else 0), item.priority),
@@ -155,16 +171,20 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
         eligible_by_source: dict[str, list[SourceItem]] = {}
         for item in ordered:
             if item.published_at is not None and not _in_window(item.published_at, now, candidate_window):
+                if audit: audit.event(item, "feed_freshness", "dropped", "future_publication_time" if item.published_at > now + timedelta(minutes=10) else "outside_168h_feed_window", {"published_at": item.published_at.isoformat()})
                 continue
             bucket = eligible_by_source.setdefault(item.source_id, [])
             # HTML indexes mix article cards with navigation; scan a bounded set of recent links.
             if len(bucket) < 20:
                 bucket.append(item)
+                if audit: audit.event(item, "source_cap", "kept", "within_20_per_source")
+            elif audit: audit.event(item, "source_cap", "dropped", "per_source_scan_cap_20")
         eligible = [item for bucket in eligible_by_source.values() for item in bucket]
+        if audit: audit.metrics["feed_freshness_and_source_cap_passed"] = len(eligible)
 
         def normalize(item: SourceItem) -> tuple[SourceItem, Article | None, str | None, dict[str, object] | None]:
             try:
-                return item, _candidate_to_article(item, now, sources_by_id[item.source_id]), None, None
+                return item, _candidate_to_article(item, now, sources_by_id[item.source_id], audit), None, None
             except Exception as exc:
                 return item, None, f"{item.url}: {type(exc).__name__}: {exc}", failure_details(exc, "normalization")
 
@@ -174,28 +194,65 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
                 for item, article, error, detail in executor.map(normalize, eligible):
                     if error:
                         errors.append(error)
+                        if audit: audit.event(item, "normalization", "dropped", "normalization_exception", {"error_kind": detail["error_kind"], "http_status": detail["http_status"]})
                         normalization_errors.append({"source_id": item.source_id, "article_id": article_id(item.url),
                                                      "fetch_method": sources_by_id[item.source_id].fetch_method,
                                                      "error_type": detail["error_type"], "error_summary": detail["error_summary"],
                                                      "error_kind": detail["error_kind"], "http_status": detail["http_status"],
                                                      "isolated": True})
-                    elif article and _in_window(datetime.fromisoformat(article.published_at), now, candidate_window):
-                        articles.append(article)
-            articles = _collapse_release_bursts(articles)[:maximum]
+                    elif article:
+                        if audit: audit.event(article, "normalization", "kept", "extracted_content")
+                        if _in_window(datetime.fromisoformat(article.published_at), now, candidate_window):
+                            if audit: audit.event(article, "extracted_freshness", "kept", "within_168h_extracted_window")
+                            articles.append(article)
+                        elif audit: audit.event(article, "extracted_freshness", "dropped", "future_publication_time" if datetime.fromisoformat(article.published_at) > now + timedelta(minutes=10) else "outside_168h_extracted_window", {"published_at": article.published_at})
+            before_burst = articles
+            if audit: audit.metrics["freshness_passed"] = len(before_burst)
+            collapsed = _collapse_release_bursts(articles)
+            articles = collapsed[:maximum]
+            if audit: audit.metrics["dedup_passed"] = len(collapsed)
+            if audit:
+                collapsed_ids = {a.id for a in collapsed}
+                retained_ids = {a.id for a in articles}
+                for a in before_burst:
+                    audit.event(a, "release_burst_dedup", "kept" if a.id in collapsed_ids else "dropped",
+                                "distinct_release" if a.id in collapsed_ids else "same_day_patch_burst")
+                for a in collapsed:
+                    audit.event(a, "collection_cap", "kept" if a.id in retained_ids else "dropped",
+                                "within_maximum" if a.id in retained_ids else "maximum_200")
         except Exception as exc:
             raise mark_failure(exc, "normalization")
         window_hours = candidate_window
         if len(articles) >= minimum or candidate_window == 168:
             break
     inserted = 0
+    inserted_ids: list[str] = []
     if not dry_run:
         store = ArticleStore(root / "data" / "ai_daily.sqlite3")
         try:
             store.purge_articles_for_hosts(BLOCKED_CONTENT_HOSTS)
             for article in articles:
-                inserted += int(store.add(article))
+                if audit:
+                    existing = store.connection.execute(
+                        "SELECT id,original_url FROM articles WHERE original_url = ? OR fingerprint = ? LIMIT 1",
+                        (article.original_url, article.fingerprint)).fetchone()
+                is_new = store.add(article)
+                inserted += int(is_new)
+                if is_new:
+                    inserted_ids.append(article.id)
+                if audit:
+                    if is_new:
+                        audit.event(article, "db_insert", "kept", "inserted")
+                    else:
+                        audit.event(article, "db_insert", "dropped",
+                                    "duplicate_url" if existing and existing[1] == article.original_url else "duplicate_fingerprint",
+                                    {"duplicate_of": existing[0] if existing else None,
+                                     "existing_article_remains_eligible": True})
         finally:
             store.close()
+    if audit:
+        audit.collection_sets(source_items, articles, inserted_ids)
+        audit.metrics.update({"raw_articles": audit.metrics.get("raw_index_entries_seen", len(source_items)), "parsed_source_items": len(source_items), "normalized_articles": sum(1 for t in audit.traces.values() if any(e["stage"] == "normalization" and e["status"] == "kept" for e in t["events"])), "collection_accepted": len(articles), "collection_inserted": inserted})
     result = RunResult(len(source_items), len(articles), inserted, window_hours, tuple(errors), tuple(articles),
                        tuple(source_health), tuple(source_errors), tuple(normalization_errors))
     output = {

@@ -286,66 +286,84 @@ class _AnchorParser(HTMLParser):
             self.current_url, self.current_text = None, []
 
 
-def _feed_items(source: SourceDefinition, xml_text: str) -> list[SourceItem]:
+def _feed_items(source: SourceDefinition, xml_text: str, on_decision=None) -> list[SourceItem]:
     root = ET.fromstring(xml_text)
     items: list[SourceItem] = []
-    for node in root.findall(".//item"):
+    for index, node in enumerate(root.findall(".//item")):
         title = (node.findtext("title") or "").strip()
         url = (node.findtext("link") or "").strip()
         published = parse_datetime(node.findtext("pubDate") or node.findtext("published"))
-        if title and url and _allowed(url, source):
+        allowed = bool(title and url and _allowed(url, source))
+        if on_decision: on_decision(source, "rss", index, title, url, published, "kept" if allowed else "dropped",
+                                    "parsed_feed_item" if allowed else "missing_title" if not title else "missing_url" if not url else "invalid_or_disallowed_url")
+        if allowed:
             items.append(SourceItem(source.source_id, source.name, source.source_type, title, url, published, source.priority,
                                     source.region, source.categories, source.tier, source.language, source.source_role, source.channels))
     ns = {"atom": "http://www.w3.org/2005/Atom"}
-    for node in root.findall(".//atom:entry", ns):
+    for index, node in enumerate(root.findall(".//atom:entry", ns)):
         title = (node.findtext("atom:title", namespaces=ns) or "").strip()
         link = next((entry.attrib.get("href", "") for entry in node.findall("atom:link", ns) if entry.attrib.get("rel", "alternate") == "alternate"), "")
         published = parse_datetime(node.findtext("atom:published", namespaces=ns) or node.findtext("atom:updated", namespaces=ns))
-        if title and link and _allowed(link, source):
+        allowed = bool(title and link and _allowed(link, source))
+        if on_decision: on_decision(source, "atom", index, title, link, published, "kept" if allowed else "dropped",
+                                    "parsed_feed_item" if allowed else "missing_title" if not title else "missing_url" if not link else "invalid_or_disallowed_url")
+        if allowed:
             items.append(SourceItem(source.source_id, source.name, source.source_type, title, link, published, source.priority,
                                     source.region, source.categories, source.tier, source.language, source.source_role, source.channels))
     # Bound oversized feeds before downstream scheduling; feeds are newest-first.
+    if on_decision:
+        for index, item in enumerate(items[100:], start=100):
+            on_decision(source, "feed_cap", index, item.title, item.url, item.published_at, "dropped", "feed_cap_100")
     return items[:100]
 
 
 class SourceAdapter(Protocol):
-    def parse(self, source: SourceDefinition, body: str) -> list[SourceItem]: ...
+    def parse(self, source: SourceDefinition, body: str, on_decision=None) -> list[SourceItem]: ...
 
 
 class RSSAdapter:
-    def parse(self, source: SourceDefinition, body: str) -> list[SourceItem]:
-        return _feed_items(source, body)
+    def parse(self, source: SourceDefinition, body: str, on_decision=None) -> list[SourceItem]:
+        return _feed_items(source, body, on_decision)
 
 
 class AtomAdapter:
-    def parse(self, source: SourceDefinition, body: str) -> list[SourceItem]:
-        return _feed_items(source, body)
+    def parse(self, source: SourceDefinition, body: str, on_decision=None) -> list[SourceItem]:
+        return _feed_items(source, body, on_decision)
 
 
 class JSONIndexAdapter:
     """Read small official JSON indexes without coupling the collector to a full site API."""
-    def parse(self, source: SourceDefinition, body: str) -> list[SourceItem]:
+    def parse(self, source: SourceDefinition, body: str, on_decision=None) -> list[SourceItem]:
         payload = json.loads(body)
         rows = payload if isinstance(payload, list) else payload.get("items", []) if isinstance(payload, dict) else []
         items: list[SourceItem] = []
-        for row in rows[:100]:
+        for index, row in enumerate(rows[:100]):
             if not isinstance(row, dict):
+                if on_decision: on_decision(source, "json", index, "", "", None, "dropped", "malformed_article")
                 continue
             title = str(row.get("TITLE") or row.get("title") or "").strip()
             url = str(row.get("URL") or row.get("url") or "").strip()
             published = parse_datetime(str(row.get("DOCRELPUBTIME") or row.get("published_at") or ""))
-            if title and url and RADAR_TERMS.search(title) and _allowed(url, source):
+            allowed = bool(title and url and RADAR_TERMS.search(title) and _allowed(url, source))
+            if on_decision: on_decision(source, "json", index, title, url, published, "kept" if allowed else "dropped",
+                                        "parsed_json_item" if allowed else "missing_title" if not title else "missing_url" if not url else "radar_terms_absent" if not RADAR_TERMS.search(title) else "invalid_or_disallowed_url")
+            if allowed:
                 items.append(SourceItem(source.source_id, source.name, source.source_type, title, url, published, source.priority,
                                         source.region, source.categories, source.tier, source.language, source.source_role, source.channels))
+        if on_decision:
+            for index, row in enumerate(rows[100:], start=100):
+                title = str(row.get("TITLE") or row.get("title") or "").strip() if isinstance(row, dict) else ""
+                url = str(row.get("URL") or row.get("url") or "").strip() if isinstance(row, dict) else ""
+                on_decision(source, "json", index, title, url, None, "dropped", "index_cap_100")
         return items
 
 
 class HTMLIndexAdapter:
-    def parse(self, source: SourceDefinition, body: str) -> list[SourceItem]:
+    def parse(self, source: SourceDefinition, body: str, on_decision=None) -> list[SourceItem]:
         parser = _AnchorParser()
         parser.feed(body)
         deduped: dict[str, SourceItem] = {}
-        for href, title in parser.anchors:
+        for index, (href, title) in enumerate(parser.anchors):
             url = urljoin(source.url, href)
             parsed_url = urlparse(url)
             normalized_path = posixpath.normpath(parsed_url.path)
@@ -356,14 +374,18 @@ class HTMLIndexAdapter:
             if parsed_url.scheme == "http" and any((parsed_url.hostname or "").lower() == host or (parsed_url.hostname or "").lower().endswith("." + host) for host in source.allow_hosts):
                 url = urlunparse(parsed_url._replace(scheme="https"))
             title = " ".join(title.split())
-            if not title or len(title) < 12 or BLOCKED_CONTENT_TERMS.search(title) or not RADAR_TERMS.search(title) or not _allowed(url, source):
-                continue
-            if source.article_path_pattern and not re.search(source.article_path_pattern, urlparse(url).path):
-                continue
-            if url.rstrip("/") == source.url.rstrip("/"):
+            reason = ("missing_title" if not title else "title_shorter_than_12" if len(title) < 12 else
+                      "blocked_content_terms" if BLOCKED_CONTENT_TERMS.search(title) else
+                      "radar_terms_absent" if not RADAR_TERMS.search(title) else
+                      "invalid_or_disallowed_url" if not _allowed(url, source) else
+                      "article_path_pattern_mismatch" if source.article_path_pattern and not re.search(source.article_path_pattern, urlparse(url).path) else
+                      "index_self_link" if url.rstrip("/") == source.url.rstrip("/") else None)
+            if on_decision: on_decision(source, "html", index, title, url, None, "dropped" if reason else "kept", reason or "parsed_index_link")
+            if reason:
                 continue
             date_match = re.search(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},\s+\d{4}\b", title, re.I)
             published = parse_datetime(date_match.group(0)) if date_match else None
+            if on_decision and url in deduped: on_decision(source, "html_dedup", index, title, url, published, "dropped", "duplicate_index_url")
             deduped.setdefault(url, SourceItem(source.source_id, source.name, source.source_type, title, url, published, source.priority,
                                                source.region, source.categories, source.tier, source.language, source.source_role, source.channels))
         return list(deduped.values())
@@ -379,12 +401,12 @@ def collect_source_items(source: SourceDefinition) -> list[SourceItem]:
     return ADAPTERS[source.adapter].parse(source, fetch(source.url, allow_hosts=source.allow_hosts))
 
 
-def collect_source(source: SourceDefinition, cache: SourceCache | None = None) -> SourceCollection:
+def collect_source(source: SourceDefinition, cache: SourceCache | None = None, *, on_decision=None) -> SourceCollection:
     if not source.enabled:
         return SourceCollection((), "disabled")
     cached = cache.get_source_cache(source.source_id, source.url) if cache and source.conditional_requests else None
     response = fetch_response(source.url, cached=cached, allow_hosts=source.allow_hosts)
-    items = tuple(ADAPTERS[source.adapter].parse(source, response.body))
+    items = tuple(ADAPTERS[source.adapter].parse(source, response.body, on_decision=on_decision) if on_decision else ADAPTERS[source.adapter].parse(source, response.body))
     if cache and not response.not_modified:
         cache.save_source_cache(source.source_id, source.url, response.body, response.etag, response.last_modified)
     return SourceCollection(items, "ok" if items else "empty", response.not_modified,

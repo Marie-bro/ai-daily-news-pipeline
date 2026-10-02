@@ -335,9 +335,35 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
         rules = policy(root)
         daily_limit = int(rules["maximum"])
         inventory, cached = store.supply_inventory((now - timedelta(hours=168)).isoformat(), (now + timedelta(minutes=10)).isoformat())
+        inventory_before_content_gate = inventory
+        if audit:
+            audit.inventory_origin_events(inventory)
+            for article in inventory:
+                if _eligible_content(article):
+                    audit.event(article, "content_gate", "kept", "eligible_content")
+                else:
+                    parsed = urlparse(article.original_url)
+                    host = (parsed.hostname or "").lower()
+                    reason = ("source_not_verified" if article.verification_status != "source_verified" else
+                              "category_not_supported" if article.category not in TECH_CATEGORIES else
+                              "tier_above_3" if article.source_tier > 3 else
+                              "discovery_source" if article.source_role == "discovery" else
+                              "non_https_or_host_missing" if parsed.scheme != "https" or not host else
+                              "index_page" if parsed.path.rstrip("/").lower() in {"", "/research", "/news", "/about", "/newsroom", "/en/news"} else
+                              "blocked_host" if any(host == blocked or host.endswith("." + blocked) for blocked in BLOCKED_CONTENT_HOSTS) else
+                              "blocked_content_terms")
+                    audit.event(article, "content_gate", "dropped", reason)
         inventory = [article for article in inventory if _eligible_content(article)]
         past = history(root.parent / "ai-daily-public-site", now)
-        chosen, _, selection_diagnostics = select(inventory, now, rules, past, cached, limit=daily_limit)
+        chosen, _, selection_diagnostics = select(inventory, now, rules, past, cached, limit=daily_limit,
+            on_decision=(lambda a, st, status, reason, detail: audit.event(a, "initial_" + st, status, reason, detail)) if audit else None)
+        if audit:
+            audit.inventory_sets(inventory_before_content_gate, inventory, chosen)
+        if audit: audit.metrics.update({
+            "inventory_eligible_content": len(inventory),
+            "candidate_pool": sum(any(e["stage"] == "initial_candidate_pool" and e["status"] == "kept"
+                                      for e in trace["events"]) for trace in audit.traces.values()),
+            "initial_selected": len(chosen)})
         initial_articles = [article for article in chosen if article.id not in cached]
         if not chosen:
             selection_diagnostics["minimum_not_met_reason"] = "no source-verified candidates passed the existing supply policy"
@@ -401,6 +427,39 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                 "model_request_attempts": request_attempts,
             }, ensure_ascii=False, indent=2), encoding="utf-8")
 
+        def record_final_audit() -> None:
+            if not audit:
+                return
+            audit.enrichment_sets(attempted)
+            # One final deterministic selector pass provides reasons without another model request.
+            ready = [replace(article, category=all_enriched[article.id].category) for article in inventory if article.id in all_enriched]
+            final_drops = {}
+            def on_final_decision(article, stage, status, reason, detail):
+                audit.event(article, "final_" + stage, status, reason, detail)
+                if status == "dropped": final_drops[article.id] = (reason, detail)
+            selected, _, _ = select(ready, now, rules, past, all_enriched, limit=daily_limit,
+                on_decision=on_final_decision)
+            pre_dedup = [all_enriched[a.id] for a in selected]
+            published_ids = {e.article_id for e in publishable}
+            for enrichment in pre_dedup:
+                article = next(a for a in ready if a.id == enrichment.article_id)
+                if enrichment.article_id in published_ids:
+                    audit.event(article, "publishable", "kept", "selected_after_event_dedup")
+                else:
+                    twin = next((other for other in publishable if same_event(enrichment.title_cn, other.title_cn) and same_event(enrichment.title_en, other.title_en)), None)
+                    audit.event(article, "publishable", "dropped", "duplicate_bilingual_event", {"duplicate_of": twin.article_id if twin else None})
+            for article in ready:
+                if article.id not in {e.article_id for e in pre_dedup}:
+                    reason, detail = final_drops.get(article.id, ("final_selector_excluded", {}))
+                    audit.event(article, "publishable", "dropped", reason, detail)
+            audit.metrics.update({"enrichment_requested": len(attempted), "enrichment_succeeded": stats["model_accepted"],
+                "enrichment_failed": len(audit_entries) - stats["model_accepted"], "validation_passed": stats["model_accepted"],
+                "validation_failed": stats["hard_fact_rejected"] + stats["semantic_rejected"],
+                "repair_succeeded": stats["repaired"], "repair_attempted": sum(bool(x.get("repair_attempted") or x.get("repaired")) for x in audit_entries),
+                "final_publishable": len(publishable), "target_count": rules["target"], "min_count": rules["minimum"],
+                "max_count": rules["maximum"], "token_used": budget_metadata["token_used"],
+                "token_remaining": budget_metadata["token_remaining"], "token_budget_status": token_budget_status})
+
         def process_batch_body(articles: list[Article], *, fallback: bool) -> bool:
             nonlocal model, character_limit, client, observed_input_ratio, token_budget_status, stopped_reason
             if not articles:
@@ -424,6 +483,8 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                 client = DeepSeekClient()
             client.request_context = {"batch_id": f"main-{batch_counter}", "article_ids": [article.id for article in articles]}
             client.on_attempt = request_attempts.append
+            if audit:
+                audit.model_submitted(articles, batch_counter)
             try:
                 content, batch_usage, model_name = client.complete_json(system_prompt=NEWS_SYSTEM_PROMPT, user_prompt=batch_prompt, max_tokens=batch_output_tokens)
             except DeepSeekError as exc:
@@ -462,8 +523,12 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                     if fallback:
                         stats["fallback_added"] += 1
                     audit_entries.append(_audit_entry(result))
+                    if audit: audit.event(result.article, "validation", "kept", "model_accepted")
                     continue
                 issue = result.error if isinstance(result.error, BilingualValidationError) else None
+                if audit:
+                    audit.event(result.article, "validation", "dropped", issue.stage if issue else "schema_invalid",
+                                {"error_type": type(result.error).__name__ if result.error else None})
                 if issue and issue.stage == "hard_facts":
                     stats["hard_fact_rejected"] += 1
                 elif issue and issue.stage == "semantic":
@@ -478,6 +543,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                 if _budget_status(len(publishable), store.daily_total_tokens(now.date().isoformat()), max_daily_tokens,
                                   repair_estimate.required_tokens, rules["minimum"]) != "normal":
                     audit_entries.append({**_audit_entry(result), "repair_skipped": "daily token guard"})
+                    if audit: audit.event(result.article, "repair", "dropped", "token_guard")
                     continue
                 try:
                     client.request_context = {"batch_id": f"repair-{batch_counter}-{result.article.id}",
@@ -497,6 +563,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                                            created_at=now.isoformat(), usage=repair_error.usage)
                         client.mark_usage_recorded()
                     audit_entries.append({**_audit_entry(result), "repair_attempted": True, "repair_result": str(repair_error)})
+                    if audit: audit.event(result.article, "repair", "dropped", "repair_failed", {"error_type": type(repair_error).__name__})
                     continue
                 generated.append(repaired.enrichment)
                 all_enriched[repaired.article.id] = repaired.enrichment
@@ -506,6 +573,9 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                 if fallback:
                     stats["fallback_added"] += 1
                 audit_entries.append({**_audit_entry(repaired, repaired=True), "initial_reject_stage": issue.stage, "initial_reject_reason": issue.reason})
+                if audit:
+                    audit.event(repaired.article, "repair", "kept", "repair_succeeded", {"initial_reject_stage": issue.stage})
+                    audit.event(repaired.article, "validation", "kept", "accepted_after_repair")
             store.commit()
             return True
 
@@ -514,12 +584,16 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
             if not articles:
                 return True
             batch_counter += 1
+            if audit:
+                for article in articles: audit.event(article, "enrichment", "kept", "batch_requested", {"batch_index": batch_counter, "fallback": fallback})
             active_batch_context = {"batch_index": batch_counter, "batch_article_ids": [article.id for article in articles],
                                     "model": None, "request_id": None, "token_usage": None,
                                     "local_repair_triggered": False, "fallback": fallback}
             usage_start = len(usages)
             try:
                 completed = process_batch_body(articles, fallback=fallback)
+                if audit and not completed:
+                    for article in articles: audit.event(article, "token_budget", "dropped", token_budget_status, {"batch_index": batch_counter})
                 if completed:
                     batches_completed += 1
                     publishable, metadata, diagnostics = _ready_selection(inventory, all_enriched, now, rules, past, daily_limit)
@@ -535,6 +609,12 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                 stage = failure_stage(exc, "enrichment")
                 mark_failure(exc, stage, **active_batch_context)
                 last_failure = failure_details(exc, stage)
+                if audit:
+                    update_budget_metadata()
+                    record_final_audit()
+                if audit:
+                    reason = "model_request_failed" if isinstance(exc, DeepSeekError) and exc.model_request_failed else "batch_failed"
+                    for article in articles: audit.event(article, stage, "dropped", reason, {"batch_index": batch_counter, "error_type": type(exc).__name__})
                 try:
                     persist_audit()
                 except OSError:
@@ -570,6 +650,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
         elif not stats["minimum_met"]:
             diagnostics["minimum_not_met_reason"] = "all eligible, source-verified candidates were exhausted after fact-schema validation"
         total_usage = _usage_total(usages) if usages else {}
+        record_final_audit()
         persist_audit()
         (data_dir / "supply-status.json").write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
         if not publishable or token_budget_status == "exhausted_before_minimum":

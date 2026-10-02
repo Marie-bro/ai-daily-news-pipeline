@@ -76,6 +76,37 @@ class EnrichmentTests(unittest.TestCase):
             self.assertEqual(len(attempts), 2)
             self.assertEqual([item["usage_recorded"] for item in attempts], [False, True])
 
+    def test_exhausted_network_batch_stops_with_retry_audit_and_no_usage(self):
+        from ai_daily_pipeline.run_audit import RunAudit
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "data").mkdir()
+            store = ArticleStore(root / "data" / "ai_daily.sqlite3")
+            store.add(article())
+            store.close()
+            calls = []
+            def opener(_request, timeout):
+                calls.append(timeout)
+                raise ConnectionResetError("temporary reset")
+            audit = RunAudit(root, datetime(2026, 9, 14, tzinfo=UTC))
+            with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key", "DEEPSEEK_MODEL": "configured-test-model"}), \
+                 patch("ai_daily_pipeline.deepseek.time.sleep"), \
+                 patch("ai_daily_pipeline.enrich.DeepSeekClient", side_effect=lambda: DeepSeekClient(opener=opener)):
+                with self.assertRaises(DeepSeekError):
+                    run_enrichment(root, now=datetime(2026, 9, 14, tzinfo=UTC), audit=audit)
+            self.assertEqual(len(calls), 3)
+            failure = json.loads((root / "data" / "bilingual-validation-audit.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure["failure"]["skipped_reason"], "model_request_failed")
+            self.assertEqual(len(failure["failure"]["retry_history"]), 3)
+            self.assertEqual(len(failure["model_request_attempts"]), 3)
+            self.assertEqual(failure["usage"], {})
+            store = ArticleStore(root / "data" / "ai_daily.sqlite3")
+            try:
+                self.assertEqual(store.usage_rows(), [])
+            finally:
+                store.close()
+            self.assertTrue(any(event["reason"] == "model_request_failed"
+                                for event in audit.traces["article-1"]["events"]))
 
     def test_same_event_from_multiple_sources_occupies_one_daily_item(self):
         base = dict(article_id="a", task=TASK_NAME, generated_at="2026-09-14T00:00:00+00:00", model="m",

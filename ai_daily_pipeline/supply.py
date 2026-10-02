@@ -55,26 +55,61 @@ def level(article, now):
     if age <= 168 and deep_read(article): return 4
     return None
 
-def select(articles, now, rules, past=(), enrichments=None, limit=None):
+def select(articles, now, rules, past=(), enrichments=None, limit=None, on_decision=None):
     enrichments = enrichments or {}
     urls = {normalized_url(x["original_url"]) for x in past}
     titles = [x.get("title_original", x.get("title_en", "")) for x in past]
     pool = []
+    past_fingerprints = {x.get("fingerprint") for x in past}
+    past_urls = {normalized_url(x["original_url"]): x for x in past}
+    def emit(article, stage, status, reason, detail=None):
+        if on_decision is not None:
+            on_decision(article, stage, status, reason, detail or {})
     for a in articles:
         stage = level(a, now)
-        if not editorial_candidate(a) or not stage or a.source_tier > 3 or a.source_role == "discovery" or a.verification_status != "source_verified": continue
-        if a.fingerprint in {x.get("fingerprint") for x in past} or normalized_url(a.original_url) in urls or any(same_event(a.title, t) for t in titles if t): continue
+        if not editorial_candidate(a):
+            emit(a, "quality_filter", "dropped", "editorial_exclusion")
+            continue
+        if not stage:
+            age = (now - datetime.fromisoformat(a.published_at)).total_seconds() / 3600
+            reason = "future_publication_time" if age < -1/6 else "outside_7_day_window" if age > 168 else "older_than_72h_not_deep_read"
+            emit(a, "freshness", "dropped", reason, {"age_hours": round(age, 2), "published_at": a.published_at})
+            continue
+        emit(a, "freshness", "kept", f"level_{stage}", {"published_at": a.published_at})
+        if a.source_tier > 3:
+            emit(a, "quality_filter", "dropped", "tier_above_3", {"tier": a.source_tier})
+            continue
+        if a.source_role == "discovery":
+            emit(a, "quality_filter", "dropped", "discovery_not_factual_source")
+            continue
+        if a.verification_status != "source_verified":
+            emit(a, "quality_filter", "dropped", "source_not_verified")
+            continue
+        if a.fingerprint in past_fingerprints:
+            emit(a, "historical_dedup", "dropped", "historical_fingerprint")
+            continue
+        if normalized_url(a.original_url) in urls:
+            emit(a, "historical_dedup", "dropped", "historical_url", {"duplicate_of": past_urls[normalized_url(a.original_url)].get("article_id")})
+            continue
+        past_event = next((x for x in past if same_event(a.title, x.get("title_original", x.get("title_en", "")))), None)
+        if past_event is not None:
+            emit(a, "historical_dedup", "dropped", "historical_event", {"duplicate_of": past_event.get("article_id")})
+            continue
         e = enrichments.get(a.id)
         importance = e.importance_score if e else 60 + 15 * bool(IMPACT.search(a.title))
-        if e and importance < 60: continue
+        if e and importance < 60:
+            emit(a, "quality_filter", "dropped", "enriched_importance_below_60", {"importance_score": importance})
+            continue
         relevance = 100 if a.category in rules["personal_categories"] else 0
         score = .6 * importance + .2 * {1:100, 2:85, 3:65}[a.source_tier] + 10 + .1 * relevance
         pool.append((a, stage, score, importance))
+        emit(a, "candidate_pool", "kept", "eligible", {"level": stage, "importance_score": importance})
     selected = []
     seen_fp = set()
     seen_url = set()
     stats = []
     deferred = []
+    in_run_reasons = {}
     cap = min(limit or rules["maximum"], rules["target"])
     if sum(x[3] >= rules["major_score"] for x in pool if x[1] <= 2) >= 10:
         cap = min(limit or rules["maximum"], rules["maximum"])
@@ -92,7 +127,17 @@ def select(articles, now, rules, past=(), enrichments=None, limit=None):
                 return (importance >= rules["major_score"], int(importance // 10), score + diversity - penalty, a.published_at, a.id)
             x = max(candidates, key=ordering); candidates.remove(x)
             a = x[0]
-            if a.fingerprint in seen_fp or normalized_url(a.original_url) in seen_url or any(same_event(a.title,b[0].title) for b in selected): continue
+            duplicate = next((b[0] for b in selected if a.fingerprint == b[0].fingerprint), None)
+            reason = "duplicate_fingerprint"
+            if duplicate is None:
+                duplicate = next((b[0] for b in selected if normalized_url(a.original_url) == normalized_url(b[0].original_url)), None)
+                reason = "duplicate_url"
+            if duplicate is None:
+                duplicate = next((b[0] for b in selected if same_event(a.title, b[0].title)), None)
+                reason = "duplicate_event"
+            if duplicate is not None:
+                in_run_reasons[a.id] = (reason, {"duplicate_of": duplicate.id})
+                continue
             if x[3] < rules["major_score"] and ((a.source_tier > 1 and sources[a.source] >= rules["media_limit"]) or sources[a.source] >= source_limit or categories[a.category] >= max(1, int(cap * rules["category_share"]))):
                 deferred.append(x)
                 continue
@@ -104,11 +149,30 @@ def select(articles, now, rules, past=(), enrichments=None, limit=None):
     for x in sorted(deferred, key=lambda x:x[2], reverse=True):
         if len(selected) >= min(cap, rules["minimum"]): break
         a = x[0]
-        if a.fingerprint in seen_fp or normalized_url(a.original_url) in seen_url or any(same_event(a.title,b[0].title) for b in selected): continue
+        if a.fingerprint in seen_fp:
+            in_run_reasons[a.id] = ("duplicate_fingerprint", {"phase": "diversity_fill"})
+            continue
+        if normalized_url(a.original_url) in seen_url:
+            in_run_reasons[a.id] = ("duplicate_url", {"phase": "diversity_fill"})
+            continue
+        if any(same_event(a.title,b[0].title) for b in selected):
+            in_run_reasons[a.id] = ("duplicate_event", {"phase": "diversity_fill"})
+            continue
         selected.append(x); seen_fp.add(a.fingerprint); seen_url.add(normalized_url(a.original_url))
         diversity_exception = True
     if any(count > source_limit for count in Counter(a.source for a, *_ in selected).values()):
         diversity_exception = True
+    selected_ids = {a.id for a, *_ in selected}
+    deferred_ids = {a.id for a, *_ in deferred}
+    for a, stage, score, importance in pool:
+        if a.id in selected_ids:
+            emit(a, "selection", "kept", "ranked_selection", {"level": stage, "importance_score": importance, "ranking_score": round(score, 2)})
+        else:
+            processed_levels = {step["level"] for step in stats}
+            default_reason = ("diversity_deferred_not_used" if a.id in deferred_ids else
+                              "target_met_before_level" if stage not in processed_levels else "selection_capacity")
+            reason, detail = in_run_reasons.get(a.id, (default_reason, {"level": stage, "cap": cap}))
+            emit(a, "selection", "dropped", reason, detail)
     metadata = {}
     for a, stage, score, importance in selected:
         section = "deep_read" if deep_read(a) else "major_tech" if importance >= rules["major_score"] else "for_you" if a.category in rules["personal_categories"] else "explore"

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Sources · MarieSpace Radar</title>
+  <link rel="stylesheet" href="/assets/sources.css">
+  <script src="/assets/sources.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <div class="eyebrow">MarieSpace Radar <span class="local-tag">LOCAL ONLY</span></div>
+      <h1>Sources <span>来源审计</span></h1>
+      <p>查看已保存的来源抓取与筛选轨迹。此页面只读取本机数据，不属于公开日报站点。</p>
+    </header>
+    <section class="toolbar" aria-label="查看条件">
+      <label for="date">日期 <input type="date" id="date"></label>
+      <label for="run" id="run-label">运行批次 <select id="run"></select></label>
+      <span id="loading" role="status" aria-live="polite"></span>
+    </section>
+    <section id="notice" class="notice" aria-live="polite"></section>
+    <section id="metrics" class="metrics" aria-label="来源概览"></section>
+    <section id="focused-section" class="section" hidden aria-label="Selected article trace">
+      <h2>Selected article trace / 选中文章轨迹</h2>
+      <div id="focused-trace" class="article-list"></div>
+    </section>
+    <section class="section" aria-labelledby="sources-heading">
+      <div class="section-heading"><div><span class="eyebrow">SOURCE HEALTH</span><h2 id="sources-heading">来源状态</h2></div><p>展开来源可查看保存的文章和逐步筛选状态。</p></div>
+      <div id="sources" class="source-list"></div>
+    </section>
+    <section class="section" aria-labelledby="all-heading">
+      <div class="section-heading"><div><span class="eyebrow">ALL VISIBLE ARTICLES</span><h2 id="all-heading">全部可查看文章</h2></div><p>跨来源按发布时间倒序；未保存的旧阶段标记为 unavailable。</p></div>
+      <div id="all-articles" class="article-list"></div>
+    </section>
+  </main>
+</body>
+</html>

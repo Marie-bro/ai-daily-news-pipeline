@@ -20,6 +20,7 @@ from .diagnostics import failure_details
 from .pipeline import run_collection
 from .publish import PublishError, publish_latest_report
 from .store import ArticleStore
+from .run_audit import RunAudit
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 FORMAL_BASE_URL = "https://news.mariespace.cn/"
@@ -292,7 +293,7 @@ def deploy_site_data(site_root: Path, report_path: Path) -> None:
             raise DeliveryError("site data deployment failed")
 
 
-def run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool = False, now: datetime | None = None) -> DeliveryResult:
+def _run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool = False, now: datetime | None = None, audit=None, token_budget_override: int | None = None) -> DeliveryResult:
     current = _now(now)
     def record_failure(exc: Exception, default_stage: str, candidate_count: int = 0) -> DeliveryResult:
         details = failure_details(exc, default_stage)
@@ -304,11 +305,12 @@ def run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool 
         return DeliveryResult(current.date().isoformat(), None, "skipped", str(details["skipped_reason"]), None, None, 0)
 
     try:
-        collection = run_collection(pipeline_root, dry_run=False)
+        collection = run_collection(pipeline_root, dry_run=False, audit=audit)
     except Exception as exc:
         return record_failure(exc, "collection")
     try:
-        enrichment = run_enrichment(pipeline_root)
+        kwargs = {"token_budget_override": token_budget_override} if token_budget_override is not None else {}
+        enrichment = run_enrichment(pipeline_root, audit=audit, **kwargs)
     except Exception as exc:
         return record_failure(exc, "enrichment", collection.accepted)
     if not enrichment.output_path or enrichment.saved <= 0:
@@ -331,3 +333,23 @@ def run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool 
                                       "skipped_reason": "publication_or_deployment_failed", "retry_count": 0})
         return DeliveryResult(current.date().isoformat(), None, "skipped", "publication_or_deployment_failed", None, None, 0)
     return send_existing_report(pipeline_root, site_root, report_path.stem, force=force, now=now)
+
+
+def run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool = False, now: datetime | None = None,
+                           token_budget_override: int | None = None) -> DeliveryResult:
+    audit = RunAudit(pipeline_root, _now(now))
+    result = None
+    try:
+        result = _run_scheduled_delivery(pipeline_root, site_root, force=force, now=now, audit=audit,
+                                         token_budget_override=token_budget_override)
+        return result
+    finally:
+        try:
+            audit.save(status=result.status if result else "unhandled_failure",
+                       report_url=result.url if result else None,
+                       report_id=result.report_id if result else None,
+                       feishu_send_result=result.status if result and result.status in {"sent", "uncertain"} else "not_sent",
+                       message_id=result.message_id if result else None,
+                       skipped_reason=result.reason if result else "unhandled_failure")
+        except Exception:
+            pass  # Audit remains best-effort and cannot change delivery outcome.
