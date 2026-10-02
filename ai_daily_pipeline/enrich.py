@@ -414,6 +414,8 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
         budget_metadata: dict[str, object] = {}
         active_batch_context: dict[str, object] = {}
         last_failure: dict[str, object] | None = None
+        fill_context = {"fill_stopped": False}
+        batch_records: list[dict[str, object]] = []
 
         def update_budget_metadata(estimate: TokenEstimate | None = None) -> None:
             used = store.daily_total_tokens(now.date().isoformat())
@@ -442,11 +444,16 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                 "entries": audit_entries, "usage": _usage_total(usages) if usages else {},
                 "failure": last_failure, "token_budget": budget_metadata,
                 "model_request_attempts": request_attempts,
+                "batches": batch_records, "fill": fill_context,
             }, ensure_ascii=False, indent=2), encoding="utf-8")
 
         def record_final_audit() -> None:
             if not audit:
                 return
+            audit.metrics.update(fill_context)
+            audit.metrics["enrichment_failure"] = last_failure
+            audit.metrics["model_request_attempts"] = request_attempts
+            audit.metrics["model_batches"] = batch_records
             audit.enrichment_sets(attempted)
             # One final deterministic selector pass provides reasons without another model request.
             ready = [replace(article, category=all_enriched[article.id].category) for article in inventory if article.id in all_enriched]
@@ -491,6 +498,8 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                     break
                 character_limit = max(1200, character_limit - 200)
             update_budget_metadata(estimate)
+            active_batch_context.update(max_output_tokens=batch_output_tokens,
+                clean_text_chars=sum(min(len(article.clean_text), character_limit) for article in articles))
             if status != "normal":
                 token_budget_status = status
                 stopped_reason = "token_budget_insufficient_for_next_batch"
@@ -507,7 +516,13 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
             except DeepSeekError as exc:
                 active_batch_context["model"] = exc.model or getattr(client, "model", None)
                 active_batch_context["token_usage"] = _usage_total([exc.usage]) if exc.usage else None
+                active_batch_context.update(main_usage=exc.usage, finish_reason=exc.finish_reason,
+                                            response_parse_status=exc.response_parse_status)
+                observed = next((a for a in reversed(request_attempts) if a.get("batch_id") == f"main-{batch_counter}"), {})
+                active_batch_context.update(finish_reason=observed.get("finish_reason", exc.finish_reason),
+                                            request_id=observed.get("request_id"))
                 if exc.usage is not None:
+                    usages.append(exc.usage)
                     store.record_usage(task=f"{TASK_NAME}_rejected", model=exc.model or "unknown", created_at=now.isoformat(), usage=exc.usage)
                     client.mark_usage_recorded()
                     store.commit()
@@ -518,15 +533,21 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                 observed_input_ratio = max(observed_input_ratio, actual_prompt_tokens / (len(NEWS_SYSTEM_PROMPT) + len(batch_prompt)))
             active_batch_context["model"] = model_name
             active_batch_context["token_usage"] = _usage_total([batch_usage])
+            active_batch_context.update(main_usage=batch_usage, response_parse_status="content_received")
+            observed = next((a for a in reversed(request_attempts) if a.get("batch_id") == f"main-{batch_counter}"), {})
+            active_batch_context.update(finish_reason=observed.get("finish_reason", "not_observable"),
+                                        request_id=observed.get("request_id"))
             usages.append(batch_usage)
             try:
                 results = _validated_batch(_extract_json(content), articles, model_name, now.isoformat())
             except EnrichmentError as exc:
+                active_batch_context["response_parse_status"] = "schema_invalid"
                 # A structurally invalid batch cannot be repaired safely, but its token use remains logged above.
                 store.record_usage(task=f"{TASK_NAME}_rejected", model=model_name, created_at=now.isoformat(), usage=batch_usage)
                 client.mark_usage_recorded()
                 store.commit()
                 raise mark_failure(exc, "validation")
+            active_batch_context["response_parse_status"] = "schema_validated"
             store.record_usage(task=TASK_NAME, model=model_name, created_at=now.isoformat(), usage=batch_usage)
             client.mark_usage_recorded()
             for result in results:
@@ -597,7 +618,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
             return True
 
         def process_batch(articles: list[Article], *, fallback: bool) -> bool:
-            nonlocal batch_counter, batches_completed, active_batch_context, last_failure, publishable, metadata, diagnostics
+            nonlocal batch_counter, batches_completed, active_batch_context, last_failure, publishable, metadata, diagnostics, stopped_reason
             if not articles:
                 return True
             batch_counter += 1
@@ -607,6 +628,9 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                                     "model": None, "request_id": None, "token_usage": None,
                                     "local_repair_triggered": False, "fallback": fallback}
             usage_start = len(usages)
+            completed = False
+            # Only the previously completed final selection is eligible for recovery.
+            verified_before = (list(publishable), dict(metadata), dict(diagnostics))
             try:
                 completed = process_batch_body(articles, fallback=fallback)
                 if audit and not completed:
@@ -624,8 +648,27 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                 if len(usages) > usage_start:
                     active_batch_context["token_usage"] = _usage_total(usages[usage_start:])
                 stage = failure_stage(exc, "enrichment")
+                recoverable = isinstance(exc, DeepSeekError) or (isinstance(exc, EnrichmentError) and stage == "validation")
+                can_publish = recoverable and len(verified_before[0]) >= 1
+                publishable, metadata, diagnostics = verified_before
+                reason = ("model_incomplete_generation" if isinstance(exc, DeepSeekError) and exc.response_parse_status == "incomplete_generation_not_parsed" else
+                          "model_schema_failure" if stage == "validation" else "model_request_failed")
                 mark_failure(exc, stage, **active_batch_context)
                 last_failure = failure_details(exc, stage)
+                last_failure.update(publishable_at_failure=len(publishable),
+                                    degraded_daily_entered=can_publish and len(publishable) < rules["minimum"],
+                                    failure_kind="fill_failure" if can_publish else "daily_failure")
+                submitted_ids = {ident for record in batch_records for ident in record["article_ids"]} | {a.id for a in articles}
+                fill_context.update(fill_stopped=True, fill_stopped_reason=reason,
+                    failed_batch_id=f"main-{batch_counter}", failed_batch_article_ids=[a.id for a in articles],
+                    failed_batch_finish_reason=active_batch_context.get("finish_reason", "not_observable"),
+                    publishable_at_failure=len(publishable),
+                    selected_candidates_remaining=sum(a.id not in submitted_ids and a.id not in all_enriched for a in attempted),
+                    failure_kind="fill_failure" if can_publish else "daily_failure",
+                    daily_mode=_daily_mode(len(publishable), rules["minimum"]),
+                    degraded_reason="enrichment_fill_stopped_after_model_failure" if can_publish else None)
+                if can_publish:
+                    stopped_reason = reason
                 if audit:
                     update_budget_metadata()
                     record_final_audit()
@@ -636,13 +679,41 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                     persist_audit()
                 except OSError:
                     pass  # Diagnostic writing must not replace the original failure.
+                if can_publish:
+                    return False
                 raise
+            finally:
+                main_attempts = [a for a in request_attempts if a.get("batch_id") == f"main-{batch_counter}"]
+                observed = main_attempts[-1] if main_attempts else {}
+                usage = active_batch_context.get("main_usage") or {}
+                output_cap = active_batch_context.get("max_output_tokens")
+                output_count = usage.get("completion_tokens")
+                batch_records.append({
+                    "batch_id": f"main-{batch_counter}", "article_ids": [a.id for a in articles], "batch_size": len(articles),
+                    "payload_bytes": observed.get("payload_bytes", "not_observable"),
+                    "clean_text_chars": active_batch_context.get("clean_text_chars", "not_observable"),
+                    "max_output_tokens": output_cap if output_cap is not None else "not_observable",
+                    "prompt_tokens": usage.get("prompt_tokens", "not_observable"),
+                    "completion_tokens": usage.get("completion_tokens", "not_observable"),
+                    "total_tokens": usage.get("total_tokens", "not_observable"),
+                    "finish_reason": observed.get("finish_reason", active_batch_context.get("finish_reason", "not_observable")),
+                    "response_parse_status": active_batch_context.get("response_parse_status", observed.get("response_parse_status", "not_observable")),
+                    "output_limit_reached": output_count >= output_cap if type(output_count) is int and type(output_cap) is int else "not_observable",
+                    "retry_count": max(0, len(main_attempts) - 1),
+                    "final_batch_status": "failed" if last_failure and last_failure.get("batch_index") == batch_counter else "completed" if completed else "token_guard",
+                })
+                # Include the last (also failed) batch in saved diagnostics.
+                try:
+                    persist_audit()
+                except OSError:
+                    if last_failure is None:
+                        raise
 
         for offset in range(0, len(initial_articles), model_batch_size):
             if not process_batch(initial_articles[offset:offset + model_batch_size], fallback=False):
                 break
         # Work toward the target using untouched real candidates; quality gates and the hard maximum remain unchanged.
-        while token_budget_status == "normal" and len(publishable) < rules["target"]:
+        while not fill_context["fill_stopped"] and token_budget_status == "normal" and len(publishable) < rules["target"]:
             fallback_history = _record_attempted_as_history(past, attempted)
             fallback_chosen, _, _ = select(inventory, now, rules, fallback_history, cached, limit=daily_limit)
             fallback_articles = [article for article in fallback_chosen if article.id not in all_enriched and article.id not in {item.id for item in attempted}]
@@ -666,6 +737,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
         validation_shortage = (len(publishable) < rules["minimum"]
                                and stats["hard_fact_rejected"] + stats["semantic_rejected"] > 0)
         degraded_reason = (None if daily_mode == "normal" else
+                           "enrichment_fill_stopped_after_model_failure" if fill_context["fill_stopped"] else
                            "token_budget_insufficient_for_next_batch" if token_budget_status != "normal" else
                            "eligible_candidate_shortage" if source_shortage else
                            "validation_rejections" if validation_shortage else
@@ -675,8 +747,12 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                             "degraded_reason": degraded_reason,
                             "token_guard_triggered": token_budget_status != "normal",
                             "source_shortage": source_shortage, "validation_shortage": validation_shortage})
+        fill_context.update(daily_mode=daily_mode, degraded_reason=degraded_reason)
+        diagnostics.update(fill_context)
         if token_budget_status != "normal" and not stats["minimum_met"]:
             diagnostics["minimum_not_met_reason"] = "token_budget_exhausted"
+        elif fill_context["fill_stopped"] and not stats["minimum_met"]:
+            diagnostics["minimum_not_met_reason"] = "enrichment_fill_stopped_after_model_failure"
         elif not stats["minimum_met"]:
             diagnostics["minimum_not_met_reason"] = "all eligible, source-verified candidates were exhausted after fact-schema validation"
         total_usage = _usage_total(usages) if usages else {}

@@ -21,12 +21,15 @@ from .deepseek_transport import open_request, proxy_settings, read_response
 
 class DeepSeekError(RuntimeError):
     def __init__(self, message: str, *, usage: dict[str, object] | None = None, model: str | None = None,
-                 retry_history: list[dict[str, object]] | None = None, model_request_failed: bool = False) -> None:
+                 retry_history: list[dict[str, object]] | None = None, model_request_failed: bool = False,
+                 finish_reason: str = "not_observable", response_parse_status: str = "not_observable") -> None:
         super().__init__(message)
         self.usage = usage
         self.model = model
         self.retry_history = retry_history or []
         self.model_request_failed = model_request_failed
+        self.finish_reason = finish_reason
+        self.response_parse_status = response_parse_status
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -132,6 +135,7 @@ class DeepSeekClient:
             started = time.monotonic()
             complete_response = False
             trace = {"request_id": request_id, "start_time": datetime.now(timezone.utc).isoformat(),
+                     "batch_size": len(self.request_context.get("article_ids", [])), "max_output_tokens": max_tokens,
                      "payload_bytes": len(request.data), "proxy_mode": self.proxy_mode if self.opener is None else "injected",
                      "connect_timeout_seconds": self.connect_timeout, "read_timeout_seconds": self.read_timeout,
                      "failure_phase": "injected_transport" if self.opener is not None else "dns_resolve",
@@ -163,6 +167,8 @@ class DeepSeekClient:
                     "complete_response_received": complete_response,
                     "usage_recorded": False,
                     "retryable": retryable,
+                    "finish_reason": "not_observable", "output_limit_reached": "not_observable",
+                    "response_parse_status": "response_json_invalid" if trace["failure_phase"] == "response_json_decode" else "transport_failed",
                 }
                 self._record_attempt(event)
                 if retryable and attempt < self.max_attempts:
@@ -173,8 +179,20 @@ class DeepSeekClient:
                            else f"DeepSeek response could not be read: {_safe_error(exc).replace(self.key, '[REDACTED]')}")
                 raise DeepSeekError(message, retry_history=list(self.last_attempt_history),
                                     model_request_failed=retryable and attempt == self.max_attempts) from exc
+            choice_observed = (body.get("choices", [None])[0] if isinstance(body, dict)
+                               and isinstance(body.get("choices"), list) and body["choices"] else None)
+            finish = choice_observed.get("finish_reason") if isinstance(choice_observed, dict) else None
+            observed_usage = body.get("usage") if isinstance(body, dict) else None
+            completion = observed_usage.get("completion_tokens") if isinstance(observed_usage, dict) else None
             self._record_attempt({
                 **trace,
+                "finish_reason": finish if isinstance(finish, str) else "not_observable",
+                "usage": {k: v for k, v in observed_usage.items() if type(v) is int} if isinstance(observed_usage, dict) else None,
+                "prompt_tokens": observed_usage.get("prompt_tokens", "not_observable") if isinstance(observed_usage, dict) else "not_observable",
+                "completion_tokens": completion if type(completion) is int else "not_observable",
+                "total_tokens": observed_usage.get("total_tokens", "not_observable") if isinstance(observed_usage, dict) else "not_observable",
+                "output_limit_reached": completion >= max_tokens if type(completion) is int else "not_observable",
+                "response_parse_status": "response_json_parsed",
                 "batch_id": self.request_context.get("batch_id"),
                 "article_ids": self.request_context.get("article_ids", []),
                 "attempt": attempt, "exception_type": None, "http_status": trace["http_status"],
@@ -199,7 +217,8 @@ class DeepSeekClient:
         if not isinstance(content, str) or not content.strip():
             raise DeepSeekError("DeepSeek returned an empty assistant content", usage=usage, model=model)
         if choice.get("finish_reason") not in (None, "stop"):
-            raise DeepSeekError("DeepSeek response was not fully generated", usage=usage, model=model)
+            raise DeepSeekError("DeepSeek response was not fully generated", usage=usage, model=model,
+                                finish_reason=choice["finish_reason"], response_parse_status="incomplete_generation_not_parsed")
         return content.strip(), usage or {}, model
 
     def _record_attempt(self, event: dict[str, object]) -> None:
