@@ -4,11 +4,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
+import ssl
 import subprocess
 import sys
+import time
 import uuid
+import re
+from queue import Queue, Empty
+from threading import Thread
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 from urllib.error import HTTPError, URLError
@@ -25,9 +31,16 @@ from .run_audit import RunAudit
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 FORMAL_BASE_URL = "https://news.mariespace.cn/"
 DELIVERY_LOG = "data/delivery-runs.jsonl"
+# Backoff saturates at 30 seconds; the deadline, rather than a retry count, ends the wait.
+PUBLIC_VERIFY_DELAYS_SECONDS = (5, 10, 15, 30)
+PUBLIC_VERIFY_MAX_WAIT_SECONDS = 210
 
 
 class DeliveryError(RuntimeError):
+    pass
+
+
+class PublishVerificationError(DeliveryError):
     pass
 
 
@@ -142,21 +155,143 @@ def card_for_report(report: dict[str, object], url: str) -> dict[str, object]:
     }
 
 
-def verify_public_report(report: dict[str, object], url: str, *, opener=urlopen) -> None:
-    if not url.startswith(FORMAL_BASE_URL):
-        raise DeliveryError("daily URL is not on the formal domain")
+def _verification_error_kind(exc: Exception) -> str:
+    reason = exc.reason if isinstance(exc, URLError) else exc
+    if isinstance(exc, HTTPError):
+        return "http_non_200"
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return "timeout"
+    if isinstance(reason, socket.gaierror):
+        return "dns"
+    if isinstance(reason, ssl.SSLError):
+        return "tls"
+    message = str(reason).lower()
+    if "timed out" in message or "timeout" in message:
+        return "timeout"
+    if "name or service not known" in message or "getaddrinfo" in message or "name resolution" in message:
+        return "dns"
+    if "certificate" in message or "ssl" in message or "tls" in message:
+        return "tls"
+    return "network_other"
+
+
+def _probe_public_url(endpoint: str, kind: str, report_date: str, opener, timeout: float) -> dict[str, object]:
+    result = {"http_status": None, "exception_type": None, "error_message": None,
+              "failure_type": None, "response_cache_headers": {}}
+    def cache_headers(headers):
+        return {name: headers.get(name) for name in
+                ("Date", "Age", "Cache-Control", "ETag", "Last-Modified", "EO-Cache-Status", "Retry-After")
+                if headers is not None and headers.get(name) is not None}
     try:
-        with opener(Request(url, headers={"User-Agent": "MarieSpace-Tech-Daily/1.0"}), timeout=20) as response:
-            if getattr(response, "status", 200) != 200:
-                raise DeliveryError("daily page is not reachable")
-        report_date = str(report["report_date"])
-        data_url = f"{FORMAL_BASE_URL}data/daily/ai/{report_date}.json"
-        with opener(Request(data_url, headers={"User-Agent": "MarieSpace-Tech-Daily/1.0"}), timeout=20) as response:
-            public = json.loads(response.read().decode("utf-8"))
+        with opener(Request(endpoint, headers={"User-Agent": "MarieSpace-Tech-Daily/1.0",
+                                               "Cache-Control": "no-cache", "Pragma": "no-cache"}),
+                    timeout=timeout) as response:
+            result["http_status"] = getattr(response, "status", 200)
+            result["response_cache_headers"] = cache_headers(getattr(response, "headers", None))
+            if result["http_status"] != 200:
+                result.update(failure_type="http_non_200", error_message=f"HTTP {result['http_status']}")
+            elif kind == "json":
+                public = json.loads(response.read().decode("utf-8"))
+                if not isinstance(public, dict) or public.get("report_date") != report_date or not public.get("items"):
+                    result.update(failure_type="invalid_report", error_message="daily data is missing or empty")
     except (HTTPError, URLError, OSError, ValueError) as exc:
-        raise DeliveryError("formal daily URL could not be verified") from exc
-    if not isinstance(public, dict) or public.get("report_date") != report_date or not public.get("items"):
-        raise DeliveryError("formal daily data is missing or empty")
+        result.update(failure_type=_verification_error_kind(exc), exception_type=type(exc).__name__,
+                      error_message=str(exc)[:300])
+        if isinstance(exc, HTTPError):
+            result["http_status"] = exc.code
+            result["response_cache_headers"] = cache_headers(exc.headers)
+        elif isinstance(exc, json.JSONDecodeError):
+            result["failure_type"] = "invalid_json"
+    return result
+
+
+def _bounded_public_probe(endpoint: str, kind: str, report_date: str, opener, timeout: float) -> dict[str, object]:
+    # Socket timeouts alone do not bound DNS or a slowly streaming read(). A daemon
+    # worker bounds the caller's wait; a late result is discarded and cannot trigger sending.
+    result_queue = Queue(maxsize=1)
+    def worker():
+        try:
+            result_queue.put(_probe_public_url(endpoint, kind, report_date, opener, timeout))
+        except Exception as exc:
+            result_queue.put({"http_status": None, "exception_type": type(exc).__name__,
+                              "error_message": "readiness probe failed", "failure_type": "network_other",
+                              "response_cache_headers": {}})
+    Thread(target=worker, name="radar-readiness", daemon=True).start()
+    try:
+        return result_queue.get(timeout=timeout)
+    except Empty:
+        return {"http_status": None, "exception_type": "TimeoutError", "error_message": "readiness request exceeded its time allowance",
+                "failure_type": "timeout", "response_cache_headers": {}}
+
+
+def verify_public_report(report: dict[str, object], url: str, *, opener=urlopen,
+                         sleeper: Callable[[float], None] = time.sleep,
+                         attempt_log: list[dict[str, object]] | None = None,
+                         clock: Callable[[], float] = time.monotonic,
+                         wall_clock: Callable[[], datetime] = _now,
+                         readiness_log: dict[str, object] | None = None,
+                         deployment_context: dict[str, object] | None = None) -> None:
+    if not url.startswith(FORMAL_BASE_URL):
+        raise PublishVerificationError("daily URL is not on the formal domain")
+    report_date = str(report["report_date"])
+    data_url = f"{FORMAL_BASE_URL}data/daily/ai/{report_date}.json"
+    attempts = attempt_log if attempt_log is not None else []
+    summary = readiness_log if readiness_log is not None else {}
+    deployment = deployment_context or {}
+    start = clock()
+    started_at = wall_clock()
+    deadline = start + PUBLIC_VERIFY_MAX_WAIT_SECONDS
+    push_offset_ms = None
+    try:
+        pushed = datetime.fromisoformat(deployment["deploy_push_finished_time"])
+        offset = (started_at - pushed).total_seconds() * 1000
+        if offset >= 0: push_offset_ms = offset
+    except (KeyError, TypeError, ValueError):
+        pass  # A manual verify or an old run has no observable push timestamp.
+    summary.update({"deploy_commit_sha": deployment.get("deploy_commit_sha"),
+                    "deploy_push_finished_time": deployment.get("deploy_push_finished_time"),
+                    "readiness_start_time": started_at.isoformat(),
+                    "readiness_deadline": (started_at + timedelta(seconds=PUBLIC_VERIFY_MAX_WAIT_SECONDS)).isoformat(),
+                    "h5_first_200_after_ms": None, "json_first_200_after_ms": None,
+                    "h5_first_200_at": None, "json_first_200_at": None,
+                    "readiness_result": "waiting", "readiness_max_wait_seconds": PUBLIC_VERIFY_MAX_WAIT_SECONDS})
+    ready = {"h5": False, "json": False}
+    attempt = 0
+    while clock() < deadline:
+        attempt += 1
+        for kind, endpoint in (("h5", url), ("json", data_url)):
+            if ready[kind]:
+                continue
+            remaining = deadline - clock()
+            if remaining <= 0:
+                break
+            request_started = clock()
+            entry = {"timestamp": wall_clock().isoformat(), "attempt": attempt, "kind": kind, "url": endpoint,
+                     "deploy_commit_sha": summary["deploy_commit_sha"],
+                     "deploy_push_finished_time": summary["deploy_push_finished_time"],
+                     "readiness_start_time": summary["readiness_start_time"], "deadline": summary["readiness_deadline"]}
+            entry.update(_bounded_public_probe(endpoint, kind, report_date, opener, min(20, remaining)))
+            elapsed = max(0, (clock() - start) * 1000)
+            timestamp = wall_clock().isoformat()
+            if entry["http_status"] == 200 and summary[f"{kind}_first_200_at"] is None:
+                summary[f"{kind}_first_200_at"] = timestamp
+                summary[f"{kind}_first_200_after_ms"] = round(push_offset_ms + elapsed, 2) if push_offset_ms is not None else None
+            ready[kind] = entry["http_status"] == 200 and entry["failure_type"] is None and clock() < deadline
+            entry.update({"elapsed_ms": round(max(0, (clock() - request_started) * 1000), 2),
+                          "elapsed_since_push_ms": round(push_offset_ms + elapsed, 2) if push_offset_ms is not None else None,
+                          "elapsed_since_readiness_ms": round(elapsed, 2),
+                          "first_200_at": summary[f"{kind}_first_200_at"],
+                          "status": "ready" if ready[kind] else "not_ready_yet"})
+            attempts.append(entry)
+        if all(ready.values()) and clock() < deadline:
+            summary.update(readiness_result="ready", readiness_total_ms=round((clock() - start) * 1000, 2))
+            return
+        remaining = deadline - clock()
+        if remaining <= 0:
+            break
+        sleeper(min(PUBLIC_VERIFY_DELAYS_SECONDS[min(attempt - 1, len(PUBLIC_VERIFY_DELAYS_SECONDS) - 1)], remaining))
+    summary.update(readiness_result="publish_verification_failed", readiness_total_ms=round((clock() - start) * 1000, 2))
+    raise PublishVerificationError("formal daily URL could not be verified")
 
 
 def _phase_one_root(pipeline_root: Path) -> Path:
@@ -209,12 +344,19 @@ def send_existing_report(pipeline_root: Path, site_root: Path, report_date: str,
                          dry_run: bool = False, send_dry_run: bool = False, verify_only: bool = False, now: datetime | None = None,
                          sender: Callable[[str, str, dict[str, object], str], tuple[str, int]] | None = None,
                          target: tuple[str, str] | None = None,
-                         opener=urlopen) -> DeliveryResult:
+                         opener=urlopen, verification_sleeper: Callable[[float], None] = time.sleep,
+                         verification_clock: Callable[[], float] = time.monotonic,
+                         verification_wall_clock: Callable[[], datetime] = _now,
+                         deployment_context: dict[str, object] | None = None, audit=None) -> DeliveryResult:
     started = _now(now)
     record: dict[str, object] = {"run_date": started.date().isoformat(), "start_time": started.isoformat(), "candidate_count": 0,
                                  "selected_count": 0, "report_generated": False, "report_url": None, "url_reachable": False,
                                  "feishu_send_attempted": False, "feishu_send_result": None, "message_id": None,
-                                 "skipped_reason": None, "retry_count": 0}
+                                 "skipped_reason": None, "retry_count": 0, "verification_retry_count": 0}
+    readiness = {}
+    if deployment_context:
+        record.update({key: deployment_context.get(key) for key in
+                       ("deploy_commit_sha", "deploy_push_finished_time", "deploy_push_status", "deployment_id", "deployment_status")})
     try:
         report = load_report(site_root, report_date)
         identifier = report_id(report)
@@ -225,7 +367,11 @@ def send_existing_report(pipeline_root: Path, site_root: Path, report_date: str,
         if dry_run or send_dry_run:
             record["skipped_reason"] = "dry_run" if dry_run else "feishu_send_dry_run"
             return DeliveryResult(report_date, identifier, "dry_run", str(record["skipped_reason"]), None, url, 0)
-        verify_public_report(report, url, opener=opener)
+        record["verification_attempts"] = []
+        verify_public_report(report, url, opener=opener, sleeper=verification_sleeper,
+                             attempt_log=record["verification_attempts"], clock=verification_clock,
+                             wall_clock=verification_wall_clock, readiness_log=readiness,
+                             deployment_context=deployment_context)
         record["url_reachable"] = True
         if verify_only:
             record["skipped_reason"] = "verified_without_send"
@@ -261,15 +407,27 @@ def send_existing_report(pipeline_root: Path, site_root: Path, report_date: str,
             return DeliveryResult(report_date, identifier, "sent", None, message_id, url, retries)
         finally:
             store.close()
+    except PublishVerificationError:
+        record["skipped_reason"] = "publish_verification_failed"
+        return DeliveryResult(report_date, identifier, "skipped", "publish_verification_failed", None, url, 0)
     except DeliveryError as exc:
         record["skipped_reason"] = str(exc)
         return DeliveryResult(report_date, None, "skipped", str(exc), None, None, 0)
     finally:
+        record.update(readiness)
+        if audit:
+            audit.metrics.update({key: record[key] for key in
+                                  ("deploy_commit_sha", "deploy_push_finished_time", "deploy_push_status", "deployment_id", "deployment_status",
+                                   "readiness_start_time", "readiness_deadline", "h5_first_200_at", "json_first_200_at",
+                                   "h5_first_200_after_ms", "json_first_200_after_ms", "readiness_total_ms", "readiness_result",
+                                   "verification_attempts") if key in record})
+        if record.get("verification_attempts"):
+            record["verification_retry_count"] = max(row["attempt"] for row in record["verification_attempts"]) - 1
         record["end_time"] = _now(now).isoformat()
         append_run_log(pipeline_root, record)
 
 
-def deploy_site_data(site_root: Path, report_path: Path) -> None:
+def deploy_site_data(site_root: Path, report_path: Path) -> dict[str, object]:
     try:
         relative_report = report_path.relative_to(site_root)
     except ValueError as exc:
@@ -281,7 +439,8 @@ def deploy_site_data(site_root: Path, report_path: Path) -> None:
         result = subprocess.run(command, cwd=site_root, capture_output=True, text=True, check=False)
         if command[1:3] == ["diff", "--cached"]:
             if result.returncode == 0:
-                return
+                return {"deploy_commit_sha": _deploy_commit_sha(site_root), "deploy_push_finished_time": None,
+                        "deploy_push_status": "not_attempted_no_changes", "deployment_id": None, "deployment_status": "unknown"}
             if result.returncode != 1:
                 raise DeliveryError("cannot inspect staged site data")
         elif result.returncode != 0:
@@ -291,9 +450,23 @@ def deploy_site_data(site_root: Path, report_path: Path) -> None:
         result = subprocess.run(command, cwd=site_root, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             raise DeliveryError("site data deployment failed")
+    push_finished_time = _now().isoformat()
+    return {"deploy_commit_sha": _deploy_commit_sha(site_root), "deploy_push_finished_time": push_finished_time,
+            "deploy_push_status": "pushed", "deployment_id": None, "deployment_status": "unknown"}
 
 
-def _run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool = False, now: datetime | None = None, audit=None, token_budget_override: int | None = None) -> DeliveryResult:
+def _deploy_commit_sha(site_root: Path) -> str | None:
+    # A diagnostic read never replaces a successful push with an observability failure.
+    try:
+        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=site_root, capture_output=True, text=True, check=False)
+        sha = result.stdout.strip()
+        return sha if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha) else None
+    except OSError:
+        return None
+
+
+def _run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool = False, now: datetime | None = None,
+                            audit=None, token_budget_override: int | None = None) -> DeliveryResult:
     current = _now(now)
     def record_failure(exc: Exception, default_stage: str, candidate_count: int = 0) -> DeliveryResult:
         details = failure_details(exc, default_stage)
@@ -309,8 +482,8 @@ def _run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool
     except Exception as exc:
         return record_failure(exc, "collection")
     try:
-        kwargs = {"token_budget_override": token_budget_override} if token_budget_override is not None else {}
-        enrichment = run_enrichment(pipeline_root, audit=audit, **kwargs)
+        enrichment_kwargs = {"token_budget_override": token_budget_override} if token_budget_override is not None else {}
+        enrichment = run_enrichment(pipeline_root, audit=audit, **enrichment_kwargs)
     except Exception as exc:
         return record_failure(exc, "enrichment", collection.accepted)
     if not enrichment.output_path or enrichment.saved <= 0:
@@ -325,14 +498,16 @@ def _run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool
         return DeliveryResult(current.date().isoformat(), None, "daily_failed" if budget_failed else "skipped", reason, None, None, 0)
     try:
         report_path = publish_latest_report(pipeline_root, site_root)
-        deploy_site_data(site_root, report_path)
+        deployment = deploy_site_data(site_root, report_path)
+        if audit: audit.metrics.update(deployment)
     except (PublishError, DeliveryError):
         append_run_log(pipeline_root, {"run_date": current.date().isoformat(), "start_time": current.isoformat(), "end_time": _now(now).isoformat(),
                                       "candidate_count": enrichment.candidates, "selected_count": enrichment.saved, "report_generated": False, "report_url": None,
                                       "url_reachable": False, "feishu_send_attempted": False, "feishu_send_result": None, "message_id": None,
                                       "skipped_reason": "publication_or_deployment_failed", "retry_count": 0})
         return DeliveryResult(current.date().isoformat(), None, "skipped", "publication_or_deployment_failed", None, None, 0)
-    return send_existing_report(pipeline_root, site_root, report_path.stem, force=force, now=now)
+    return send_existing_report(pipeline_root, site_root, report_path.stem, force=force, now=now,
+                                deployment_context=deployment, audit=audit)
 
 
 def run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool = False, now: datetime | None = None,

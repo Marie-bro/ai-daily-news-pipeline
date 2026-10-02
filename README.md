@@ -81,6 +81,16 @@ powershell -ExecutionPolicy Bypass -File .\deploy\install-phase6.5-worker-task.p
 
 ## 阶段边界
 
+### 正式发布 readiness（P0-2）
+
+本地发布先写入 `data/daily/ai/YYYY-MM-DD.json` 和 `data/reports.json`，再提交、推送站点仓库。`git push` 成功只表示远端 Git 已接受提交，不表示 EdgeOne 已部署完成；当前不获取 EdgeOne deployment ID / status，审计明确保留 `null` / `unknown`。
+
+正式 H5 与当天 JSON 必须全部验证成功，JSON 还须符合原有日期、非空内容检查，才允许进入现有飞书发送与幂等流程。readiness 使用 monotonic deadline，总等待窗口为 210 秒（不含 Git 执行时间），间隔依次为 5、10、15、30 秒，之后保持 30 秒；等待和单次请求都限制在剩余窗口内，没有固定轮数上限。已通过的 URL 不重复请求；404、429、5xx 和网络错误在窗口内记为 `not_ready_yet`，最终超时记为 `publish_verification_failed`，不发送飞书。
+
+阻塞请求由独立 daemon 探针隔离，调用方等待不超过该次时间额度；超时后的迟到结果丢弃，不能触发发送。网络层未结束的探针可能短暂存活，但不写业务状态。
+
+既有 delivery 日志和 run audit 保存 commit SHA、push 完成时间、readiness 开始时间/deadline，以及逐次 URL、timestamp、attempt、HTTP status、异常类型、耗时、push 后经过时间和安全的缓存响应头。最终记录 `h5_first_200_after_ms`、`json_first_200_after_ms`、`readiness_total_ms`、`readiness_result`；没有可证明的 push 时间时，传播耗时为 `null`，不推算历史数据。首次 200 是 HTTP 观测，JSON 内容验证未通过时仍不会放行。
+
 ### DeepSeek 网络路径（P0-1）
 
 DeepSeek API 默认使用独立直连路径，不读取 Windows/Clash 系统代理；不影响资讯抓取、部署、飞书或 Worker 的网络路径。保留 urllib 和 HTTPS 证书/主机名验证，每个 attempt 创建新连接，最多 3 次请求，退避仍为 2 秒、5 秒。

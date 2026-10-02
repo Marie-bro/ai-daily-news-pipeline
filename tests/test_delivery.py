@@ -2,17 +2,32 @@ from __future__ import annotations
 
 import io
 import json
+import socket
+import ssl
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from urllib.error import URLError
 from zoneinfo import ZoneInfo
 
-from ai_daily_pipeline.delivery import card_for_report, daily_url, send_existing_report
+from ai_daily_pipeline.delivery import PublishVerificationError, card_for_report, daily_url, send_existing_report, verify_public_report
 
 
 DATE = "2026-09-20"
 NOW = datetime(2026, 9, 21, 8, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+
+class FakeClock:
+    def __init__(self):
+        self.seconds = 0.0
+        self.sleeps = []
+
+    def __call__(self): return self.seconds
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.seconds += seconds
 ITEM = {
     "title_en": "Example release v1.2", "title_cn": "示例发布 v1.2", "title_original": "Example release v1.2",
     "what_happened_en": "Example Corp released v1.2.", "what_happened": "示例公司发布了 v1.2。",
@@ -24,8 +39,9 @@ ITEM = {
 class Response:
     status = 200
 
-    def __init__(self, body: bytes = b""):
+    def __init__(self, body: bytes = b"", status: int = 200):
         self.body = io.BytesIO(body)
+        self.status = status
 
     def read(self):
         return self.body.read()
@@ -41,6 +57,20 @@ def public_opener(request, timeout=20):
     if request.full_url.endswith(".json"):
         return Response(json.dumps({"report_date": DATE, "items": [ITEM]}).encode())
     return Response()
+
+
+def scripted_opener(h5: list[int | Exception], data: list[int | Exception]):
+    outcomes = {"h5": iter(h5), "json": iter(data)}
+
+    def open_request(request, timeout=20):
+        kind = "json" if request.full_url.endswith(".json") else "h5"
+        outcome = next(outcomes[kind])
+        if isinstance(outcome, Exception):
+            raise outcome
+        body = json.dumps({"report_date": DATE, "items": [ITEM]}).encode() if kind == "json" else b""
+        return Response(body, status=outcome)
+
+    return open_request
 
 
 class DeliveryTests(unittest.TestCase):
@@ -72,6 +102,27 @@ class DeliveryTests(unittest.TestCase):
         self.assertIn("&favorite=", content)
         self.assertNotIn("what_happened_en", content)
         self.assertNotIn("original_url", content)
+
+
+    def test_delayed_json_readiness_sends_only_after_both_urls_work(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            site = self.write_report(root)
+            sent = []
+            clock = FakeClock()
+            def sender(_target_type, _target_id, _card, request_id):
+                sent.append(request_id)
+                return "om_delayed_ready", 0
+            result = send_existing_report(root, site, DATE, now=NOW,
+                                          sender=sender, target=("open_id", "ou_test"),
+                                          opener=scripted_opener([200, 200], [404, 200]),
+                                          verification_sleeper=clock.sleep, verification_clock=clock)
+            self.assertEqual(result.status, "sent")
+            self.assertEqual(len(sent), 1)
+            log = json.loads((root / "data" / "delivery-runs.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual([row["http_status"] for row in log["verification_attempts"]], [200, 404, 200])
+            self.assertTrue(log["url_reachable"])
+            self.assertTrue(log["feishu_send_attempted"])
 
     def test_real_delivery_is_idempotent_and_force_is_explicit(self):
         with TemporaryDirectory() as directory:
@@ -117,7 +168,98 @@ class DeliveryTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             site = self.write_report(root)
+            clock = FakeClock()
             result = send_existing_report(root, site, DATE, now=NOW, target=("open_id", "ou_test"),
-                                          sender=lambda *_args: self.fail("must not send"), opener=lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()))
+                                          sender=lambda *_args: self.fail("must not send"), opener=lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()),
+                                          verification_sleeper=clock.sleep, verification_clock=clock)
             self.assertEqual(result.status, "skipped")
-            self.assertIn("formal daily URL", result.reason)
+            self.assertEqual(result.reason, "publish_verification_failed")
+            record = json.loads((root / "data" / "delivery-runs.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual(record["skipped_reason"], "publish_verification_failed")
+            self.assertFalse(record["feishu_send_attempted"])
+            self.assertEqual(len(record["verification_attempts"]), 18)
+
+
+class PublicVerificationRetryTests(unittest.TestCase):
+    def setUp(self):
+        self.report = {"report_date": DATE, "items": [ITEM]}
+        self.url = daily_url(DATE)
+
+    def verify(self, h5, data):
+        attempts = []
+        clock = FakeClock()
+        verify_public_report(self.report, self.url, opener=scripted_opener(h5, data),
+                             sleeper=clock.sleep, clock=clock, attempt_log=attempts)
+        return attempts, clock.sleeps
+
+    def test_first_failure_second_success(self):
+        attempts, sleeps = self.verify([503, 200], [200, 200])
+        self.assertEqual(sleeps, [5])
+        self.assertEqual([(row["attempt"], row["kind"], row["http_status"]) for row in attempts],
+                         [(1, "h5", 503), (1, "json", 200), (2, "h5", 200)])
+        self.assertEqual(attempts[0]["failure_type"], "http_non_200")
+        self.assertIn("timestamp", attempts[0])
+        self.assertTrue(all(row["url"].startswith("https://news.mariespace.cn/") and row["elapsed_ms"] >= 0 for row in attempts))
+
+    def test_multiple_failures_then_success(self):
+        attempts, sleeps = self.verify([503, 503, 200], [503, 200, 200])
+        self.assertEqual(sleeps, [5, 10])
+        self.assertEqual(len(attempts), 5)
+        self.assertTrue(all(row["failure_type"] is None for row in attempts[-2:]))
+
+    def test_final_failure_is_bounded(self):
+        attempts = []
+        clock = FakeClock()
+        with self.assertRaises(PublishVerificationError):
+            verify_public_report(self.report, self.url, opener=scripted_opener([503] * 9, [503] * 9),
+                                 sleeper=clock.sleep, clock=clock, attempt_log=attempts)
+        self.assertEqual(clock.sleeps, [5, 10, 15, 30, 30, 30, 30, 30, 30])
+        self.assertEqual(clock.seconds, 210)
+        self.assertEqual(len(attempts), 18)
+
+    def test_json_becomes_ready_after_original_five_attempt_window(self):
+        attempts, sleeps = self.verify([200] * 6, [404] * 5 + [200])
+        self.assertEqual(len(attempts), 7)
+        self.assertEqual(len(sleeps), 5)
+        self.assertEqual(attempts[-1]["kind"], "json")
+        self.assertEqual(attempts[-1]["http_status"], 200)
+
+    def test_hard_deadline_stops_even_when_requests_are_slow(self):
+        now = [0.0]
+        attempts = []
+        def slow_opener(_request, timeout=20):
+            self.assertLessEqual(timeout, 20)
+            now[0] += 110
+            return Response(status=503)
+        with self.assertRaises(PublishVerificationError):
+            verify_public_report(self.report, self.url, opener=slow_opener,
+                                 sleeper=lambda seconds: now.__setitem__(0, now[0] + seconds),
+                                 clock=lambda: now[0], attempt_log=attempts)
+        self.assertEqual(len(attempts), 2)
+
+    def test_h5_success_json_failure_still_blocks(self):
+        attempts = []
+        clock = FakeClock()
+        with self.assertRaises(PublishVerificationError):
+            verify_public_report(self.report, self.url, opener=scripted_opener([200] * 9, [503] * 9),
+                                 sleeper=clock.sleep, clock=clock, attempt_log=attempts)
+        self.assertEqual([row["kind"] for row in attempts if row["failure_type"]], ["json"] * 9)
+
+    def test_json_success_h5_failure_still_blocks(self):
+        attempts = []
+        clock = FakeClock()
+        with self.assertRaises(PublishVerificationError):
+            verify_public_report(self.report, self.url, opener=scripted_opener([503] * 9, [200] * 9),
+                                 sleeper=clock.sleep, clock=clock, attempt_log=attempts)
+        self.assertEqual([row["kind"] for row in attempts if row["failure_type"]], ["h5"] * 9)
+
+    def test_timeout_dns_and_tls_are_distinct(self):
+        cases = [(URLError(socket.timeout("timed out")), "timeout"),
+                 (URLError(socket.gaierror("DNS lookup failed")), "dns"),
+                 (URLError(ssl.SSLError("certificate verify failed")), "tls")]
+        for error, kind in cases:
+            with self.subTest(kind=kind):
+                attempts, _sleeps = self.verify([error, 200], [200, 200])
+                self.assertEqual(attempts[0]["failure_type"], kind)
+                self.assertEqual(attempts[0]["exception_type"], "URLError")
+                self.assertIn(kind, {"timeout", "dns", "tls"})
