@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -57,7 +58,7 @@ def _candidate_to_article(item: SourceItem, now: datetime, source: SourceDefinit
     if source.source_role == "discovery":
         if audit: audit.event(item, "normalization", "dropped", "discovery_source")
         return None
-    page = fetch(item.url, allow_hosts=source.allow_hosts)
+    page = fetch(item.url, **source.fetch_options())
     extracted = extract_article(page, item.title, source.cleaning)
     published = extracted.published_at or item.published_at
     if not published or not extracted.clean_text or len(extracted.clean_text) < 120:
@@ -93,9 +94,9 @@ def check_sources(root: Path) -> list[dict[str, object]]:
         try:
             collection = collect_source(source)
             status = collection.status
-            if collection.items:
+            if collection.items and source.source_role != "discovery":
                 sample = collection.items[0]
-                extracted = extract_article(fetch(sample.url, allow_hosts=source.allow_hosts), sample.title, source.cleaning)
+                extracted = extract_article(fetch(sample.url, **source.fetch_options()), sample.title, source.cleaning)
                 if len(extracted.clean_text) < 120:
                     status = "degraded"
             results.append({"source_id": source.source_id, "status": status, "items": len(collection.items),
@@ -120,14 +121,19 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
     cache = ArticleStore(root / "data" / "ai_daily.sqlite3") if not dry_run else None
     try:
         for source in sources:
+            source_started = time.monotonic()
             try:
                 result = collect_source(source, cache, on_decision=audit.parser_event) if audit else collect_source(source, cache)
+                duration_ms = round((time.monotonic() - source_started) * 1000, 2)
+                network_detail = {"duration_ms": duration_ms, "proxy_mode": source.proxy_mode,
+                                  "request_history": list(result.request_history)}
                 source_items.extend(result.items)
                 if audit:
-                    audit.source(source.source_id, result.status, len(result.items), {"fetch_method": source.fetch_method})
+                    audit.source(source.source_id, result.status, len(result.items), {"fetch_method": source.fetch_method, **network_detail})
                     for item in result.items: audit.event(item, "collection", "kept", "parsed_source_item")
-                latest_success = cache.record_source_health(source.source_id, result.status, now.isoformat(), len(result.items)) if cache else (now.isoformat() if result.status == "ok" else None)
+                latest_success = cache.record_source_health(source.source_id, result.status, now.isoformat(), len(result.items), duration_ms=duration_ms) if cache else (now.isoformat() if result.status == "ok" else None)
                 source_health.append({"source_id": source.source_id, "status": result.status,
+                                      **network_detail, **(cache.source_health_metrics(source.source_id) if cache else {}),
                                       "fetch_method": source.fetch_method,
                                       "region": source.region, "tier": source.tier, "source_role": source.source_role,
                                       "channel": list(source.channels), "configured_health": source.health_status,
@@ -135,16 +141,25 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
                                       "used_conditional_request": result.used_conditional_request,
                                       "checked_at": now.isoformat(), "latest_success_at": latest_success})
             except Exception as exc:  # An unavailable source must not invent replacements.
+                duration_ms = round((time.monotonic() - source_started) * 1000, 2)
+                network_detail = {"duration_ms": duration_ms, "proxy_mode": source.proxy_mode,
+                                  "request_history": list(getattr(exc, "source_request_history", ()))}
                 message = f"{source.source_id}: {type(exc).__name__}: {exc}"
                 errors.append(message)
                 detail = failure_details(exc, "collection")
-                if audit: audit.source(source.source_id, "error", 0, {"fetch_method": source.fetch_method, "error_type": detail["error_type"], "error_kind": detail["error_kind"], "http_status": detail["http_status"]})
+                if audit: audit.source(source.source_id, "error", 0, {
+                    **network_detail, "fetch_method": source.fetch_method, "error_type": detail["error_type"],
+                    "error_kind": detail["error_kind"], "http_status": detail["http_status"]})
                 source_errors.append({"source_id": source.source_id, "fetch_method": source.fetch_method,
+                                      **network_detail,
                                       "http_status": detail["http_status"], "error_type": detail["error_type"],
                                       "error_kind": detail["error_kind"], "error_summary": detail["error_summary"],
                                       "isolated": True})
-                latest_success = cache.record_source_health(source.source_id, "error", now.isoformat(), 0, message) if cache else None
+                latest_success = cache.record_source_health(source.source_id, "error", now.isoformat(), 0, message,
+                                                           duration_ms=duration_ms, error_kind=detail["error_kind"]) if cache else None
                 source_health.append({"source_id": source.source_id, "status": "error", "items": 0,
+                                      **network_detail, **(cache.source_health_metrics(source.source_id) if cache else {}),
+                                      "error_kind": detail["error_kind"],
                                       "fetch_method": source.fetch_method,
                                       "region": source.region, "tier": source.tier, "source_role": source.source_role,
                                       "channel": list(source.channels), "configured_health": source.health_status,

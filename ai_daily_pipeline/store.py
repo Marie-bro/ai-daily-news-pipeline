@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from pathlib import Path
 from urllib.parse import urlparse
@@ -89,6 +90,15 @@ CREATE TABLE IF NOT EXISTS source_health (
   items INTEGER NOT NULL DEFAULT 0,
   error_summary TEXT
 );
+CREATE TABLE IF NOT EXISTS source_health_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  checked_at TEXT NOT NULL,
+  duration_ms REAL,
+  error_kind TEXT
+);
+CREATE INDEX IF NOT EXISTS source_health_events_source_idx ON source_health_events(source_id, id);
 CREATE TABLE IF NOT EXISTS tech_enrichments (
   article_id TEXT PRIMARY KEY REFERENCES articles(id), task TEXT NOT NULL, generated_at TEXT NOT NULL,
   model TEXT NOT NULL, title_cn TEXT NOT NULL, title_original TEXT NOT NULL, source TEXT NOT NULL,
@@ -145,7 +155,8 @@ class ArticleStore:
         self.connection.commit()
 
     def record_source_health(self, source_id: str, status: str, checked_at: str, items: int,
-                             error_summary: str | None = None) -> str | None:
+                             error_summary: str | None = None, *, duration_ms: float | None = None,
+                             error_kind: str | None = None) -> str | None:
         previous = self.connection.execute("SELECT latest_success_at FROM source_health WHERE source_id = ?", (source_id,)).fetchone()
         latest_success = checked_at if status == "ok" else (previous[0] if previous else None)
         self.connection.execute(
@@ -154,13 +165,41 @@ class ArticleStore:
                latest_success_at=excluded.latest_success_at,items=excluded.items,error_summary=excluded.error_summary""",
             (source_id, status, checked_at, latest_success, items, error_summary),
         )
+        if status != "disabled":
+            self.connection.execute(
+                "INSERT INTO source_health_events(source_id,status,checked_at,duration_ms,error_kind) VALUES (?,?,?,?,?)",
+                (source_id, status, checked_at, duration_ms, error_kind),
+            )
         self.connection.commit()
         return latest_success
+
+    def source_health_metrics(self, source_id: str) -> dict[str, object]:
+        """Measurements start at instrumentation; never reconstruct missing historical durations."""
+        rows = self.connection.execute(
+            "SELECT status,checked_at,duration_ms,error_kind FROM source_health_events WHERE source_id=? ORDER BY id",
+            (source_id,),
+        ).fetchall()
+        durations = sorted(row[2] for row in rows if row[2] is not None)
+        failures = 0
+        for row in reversed(rows):
+            if row[0] not in {"error", "timeout", "failed"}:
+                break
+            failures += 1
+        previous = self.connection.execute("SELECT latest_success_at FROM source_health WHERE source_id=?", (source_id,)).fetchone()
+        return {"success_count": sum(row[0] == "ok" for row in rows),
+                "timeout_count": sum(row[0] == "timeout" or row[0] == "error" and row[3] == "timeout" for row in rows),
+                "empty_count": sum(row[0] == "empty" for row in rows),
+                "failure_count": sum(row[0] in {"error", "failed"} and row[3] != "timeout" for row in rows),
+                "average_duration_ms": round(sum(durations) / len(durations), 2) if durations else None,
+                "p95_duration_ms": durations[math.ceil(0.95 * len(durations)) - 1] if len(durations) >= 20 else None,
+                "last_success_at": previous[0] if previous else None, "consecutive_failures": failures,
+                "sample_count": len(rows), "duration_sample_count": len(durations),
+                "statistics_since": rows[0][1] if rows else None}
 
     def source_health_rows(self) -> dict[str, dict[str, object]]:
         cursor = self.connection.execute("SELECT source_id,status,checked_at,latest_success_at,items,error_summary FROM source_health")
         return {row[0]: {"source_id": row[0], "status": row[1], "checked_at": row[2], "latest_success_at": row[3],
-                         "items": row[4], "error_summary": row[5]} for row in cursor.fetchall()}
+                         "items": row[4], "error_summary": row[5], **self.source_health_metrics(row[0])} for row in cursor.fetchall()}
 
     def add(self, article: Article) -> bool:
         if self.is_known(article.original_url, article.fingerprint):

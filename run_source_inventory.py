@@ -4,10 +4,12 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 import json
+import time
 from pathlib import Path
 
 from ai_daily_pipeline.sources import collect_source, load_sources
 from ai_daily_pipeline.store import ArticleStore
+from ai_daily_pipeline.diagnostics import error_kind
 
 
 def main() -> int:
@@ -23,16 +25,17 @@ def main() -> int:
             checked_at = datetime.now(UTC).isoformat()
 
             def check(source):
+                started = time.monotonic()
                 try:
                     result = collect_source(source)
-                    return source.source_id, result.status, len(result.items), None
+                    return source.source_id, result.status, len(result.items), None, (time.monotonic()-started)*1000, None
                 except Exception as exc:
-                    return source.source_id, "error", 0, f"{type(exc).__name__}: {exc}"
+                    return source.source_id, "error", 0, f"{type(exc).__name__}: {exc}", (time.monotonic()-started)*1000, error_kind(exc)
 
             with ThreadPoolExecutor(max_workers=6) as executor:
                 checks = list(executor.map(check, sources))
-            for source_id, status, items, error in checks:
-                store.record_source_health(source_id, status, checked_at, items, error)
+            for source_id, status, items, error, duration, kind in checks:
+                store.record_source_health(source_id, status, checked_at, items, error, duration_ms=duration, error_kind=kind)
         health = store.source_health_rows()
     finally:
         store.close()
@@ -46,6 +49,11 @@ def main() -> int:
             "fetch_method": source.fetch_method, "health_status": runtime.get("status", "not_checked"),
             "latest_success_at": runtime.get("latest_success_at"), "latest_checked_at": runtime.get("checked_at"),
             "items": runtime.get("items", 0), "error": runtime.get("error_summary"),
+            "proxy_mode": source.proxy_mode,
+            "request_timeout_seconds": source.request_timeout_seconds, "request_attempts": source.request_attempts,
+            "health_metrics": {key: runtime.get(key) for key in (
+                "success_count", "timeout_count", "empty_count", "failure_count", "average_duration_ms",
+                "p95_duration_ms", "last_success_at", "consecutive_failures", "sample_count", "duration_sample_count", "statistics_since")},
         })
     payload = {
         "generated_at": datetime.now(UTC).isoformat(), "enabled": len(rows),

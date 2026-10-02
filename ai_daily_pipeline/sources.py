@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 import posixpath
 import re
+import socket
+import ssl
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from html import escape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Protocol
@@ -80,6 +84,13 @@ class SourceDefinition:
     health_status: str = "active"
     source_role: str = "media"
     channels: tuple[str, ...] = ("technology",)
+    proxy_mode: str = "system"
+    request_timeout_seconds: int = 12
+    request_attempts: int = 2
+
+    def fetch_options(self) -> dict:
+        return {"allow_hosts": self.allow_hosts, "proxy_mode": self.proxy_mode,
+                "timeout": self.request_timeout_seconds, "max_attempts": self.request_attempts}
 
 
 @dataclass(frozen=True)
@@ -88,6 +99,7 @@ class SourceCollection:
     status: str
     not_modified: bool = False
     used_conditional_request: bool = False
+    request_history: tuple[dict, ...] = ()
 
 
 class SourceCache(Protocol):
@@ -113,7 +125,8 @@ def load_sources(path: Path) -> list[SourceDefinition]:
             raise ValueError(f"sources[{index}] must be an object")
         unknown = set(item) - {"id", "name", "source_type", "adapter", "url", "allow_hosts", "priority",
                                "article_path_pattern", "enabled", "cleaning", "conditional_requests", "region",
-                               "category", "tier", "language", "fetch_method", "health_status", "source_role", "channel"}
+                               "category", "tier", "language", "fetch_method", "health_status", "source_role", "channel",
+                               "proxy_mode", "request_timeout_seconds", "request_attempts"}
         if unknown:
             raise ValueError(f"sources[{index}] has unknown fields: {', '.join(sorted(unknown))}")
         source_id = _required_string(item, "id", index)
@@ -162,6 +175,17 @@ def load_sources(path: Path) -> list[SourceDefinition]:
             raise ValueError(f"sources[{index}].channel contains an unsupported Radar channel")
         if source_role == "discovery" and tier != 4:
             raise ValueError(f"sources[{index}] discovery sources must use tier 4")
+        if adapter == "discovery_json" and (source_role != "discovery" or tier != 4):
+            raise ValueError("discovery_json is restricted to tier 4 discovery sources")
+        proxy_mode = item.get("proxy_mode", "system")
+        timeout = item.get("request_timeout_seconds", 12)
+        attempts = item.get("request_attempts", 2)
+        if proxy_mode not in {"system", "direct"}:
+            raise ValueError(f"sources[{index}].proxy_mode must be system or direct")
+        if type(timeout) is not int or not 1 <= timeout <= 30:
+            raise ValueError(f"sources[{index}].request_timeout_seconds must be 1..30")
+        if type(attempts) is not int or not 1 <= attempts <= 3:
+            raise ValueError(f"sources[{index}].request_attempts must be 1..3")
         for key in ("enabled", "conditional_requests"):
             if key in item and type(item[key]) is not bool:
                 raise ValueError(f"sources[{index}].{key} must be a boolean")
@@ -194,12 +218,15 @@ def load_sources(path: Path) -> list[SourceDefinition]:
             region=region, categories=tuple(categories), tier=tier, language=language,
             fetch_method=fetch_method, health_status=health_status,
             source_role=source_role, channels=tuple(channels),
+            proxy_mode=proxy_mode, request_timeout_seconds=timeout, request_attempts=attempts,
         ))
     return sources
 
 
-def fetch(url: str, timeout: int = 12, allow_hosts: tuple[str, ...] | None = None) -> str:
-    return fetch_response(url, timeout=timeout, allow_hosts=allow_hosts).body
+def fetch(url: str, timeout: int = 12, allow_hosts: tuple[str, ...] | None = None,
+          *, proxy_mode: str = "system", max_attempts: int = 2) -> str:
+    return fetch_response(url, timeout=timeout, allow_hosts=allow_hosts,
+                          proxy_mode=proxy_mode, max_attempts=max_attempts).body
 
 
 @dataclass(frozen=True)
@@ -208,10 +235,22 @@ class FetchResponse:
     etag: str | None
     last_modified: str | None
     not_modified: bool = False
+    request_history: tuple[dict, ...] = ()
+
+
+class _AllowedRedirect(urllib.request.HTTPRedirectHandler):
+    def __init__(self, allow_hosts):
+        self.allow_hosts = allow_hosts
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _safe_fetch_url(newurl, self.allow_hosts):
+            raise ValueError(f"Fetch redirected outside allowed HTTPS hosts: {newurl}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def fetch_response(url: str, timeout: int = 12, cached: dict[str, str] | None = None,
-                   allow_hosts: tuple[str, ...] | None = None) -> FetchResponse:
+                   allow_hosts: tuple[str, ...] | None = None, *, proxy_mode: str = "system",
+                   max_attempts: int = 2) -> FetchResponse:
     if not _safe_fetch_url(url, allow_hosts):
         raise ValueError(f"Fetch URL is not an allowed HTTPS source: {url}")
     headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xml,text/xml;q=0.9,*/*;q=0.2"}
@@ -221,30 +260,70 @@ def fetch_response(url: str, timeout: int = 12, cached: dict[str, str] | None = 
         if cached.get("last_modified"):
             headers["If-Modified-Since"] = cached["last_modified"]
     request = urllib.request.Request(url, headers=headers)
-    for attempt in range(2):
+    if proxy_mode not in {"system", "direct"} or type(max_attempts) is not int or not 1 <= max_attempts <= 3:
+        raise ValueError("Invalid source network policy")
+    history = []
+    for attempt in range(1, max_attempts + 1):
+        started = time.monotonic()
+        record = {"attempt": attempt, "proxy_mode": proxy_mode, "http_status": None,
+                  "exception_type": None, "error_kind": None, "elapsed_ms": None,
+                  "failure_phase": None}
+        phase = "request_open"
         try:
-            response = urllib.request.urlopen(request, timeout=timeout)
-            break
-        except urllib.error.HTTPError as exc:
-            if exc.code != 304 or cached is None:
+            # Per-source routing only; does not change process/system proxy or TLS verification.
+            opener = (urllib.request.build_opener(urllib.request.ProxyHandler({}), _AllowedRedirect(allow_hosts))
+                      if proxy_mode == "direct" else None)
+            try:
+                response = opener.open(request, timeout=timeout) if opener else urllib.request.urlopen(request, timeout=timeout)
+            except urllib.error.HTTPError as exc:
+                record["http_status"] = exc.code
+                if exc.code != 304 or cached is None:
+                    raise
+                exc.close()
+                record["elapsed_ms"] = round((time.monotonic() - started) * 1000, 2)
+                history.append(record)
+                return FetchResponse(cached["body"], cached.get("etag"), cached.get("last_modified"), True, tuple(history))
+            with response:
+                phase = "response_body"
+                record["http_status"] = getattr(response, "status", 200)
+                if not _safe_fetch_url(response.geturl(), allow_hosts):
+                    raise ValueError(f"Fetch redirected outside allowed HTTPS hosts: {response.geturl()}")
+                if record["http_status"] == 304:
+                    if cached is None:
+                        raise ValueError("304 response without cached content")
+                    body, etag, modified = cached["body"], cached.get("etag"), cached.get("last_modified")
+                else:
+                    raw = response.read(2_000_001)
+                    if len(raw) > 2_000_000:
+                        raise ValueError("Source response exceeds 2 MB")
+                    body = raw.decode(response.headers.get_content_charset() or "utf-8", errors="replace")
+                    etag, modified = response.headers.get("ETag"), response.headers.get("Last-Modified")
+                record["elapsed_ms"] = round((time.monotonic() - started) * 1000, 2)
+                history.append(record)
+                return FetchResponse(body, etag, modified, record["http_status"] == 304, tuple(history))
+        except Exception as exc:
+            cause = getattr(exc, "reason", exc)
+            record.update(exception_type=type(exc).__name__, error_kind=("timeout" if isinstance(cause, TimeoutError) else
+                          "tls" if isinstance(cause, ssl.SSLError) else "dns" if isinstance(cause, socket.gaierror) else
+                          "http" if isinstance(exc, urllib.error.HTTPError) else "network" if isinstance(exc, urllib.error.URLError) else "other"),
+                          failure_phase=phase, elapsed_ms=round((time.monotonic() - started) * 1000, 2))
+            history.append(record)
+            exc.source_request_history = tuple(history)
+            # Existing system-route policy is unchanged; direct sources retry only transient failures.
+            retry = (phase == "request_open" and isinstance(exc, urllib.error.URLError)
+                     and not isinstance(exc, urllib.error.HTTPError))
+            if proxy_mode == "direct":
+                retry = retry or isinstance(cause, (TimeoutError, ConnectionError, ssl.SSLError))
+                if isinstance(cause, ssl.SSLCertVerificationError):
+                    retry = False
+                if isinstance(exc, urllib.error.HTTPError):
+                    retry = exc.code == 429 or 500 <= exc.code <= 599
+            if isinstance(exc, urllib.error.HTTPError):
+                exc.close()
+            if not retry or attempt >= max_attempts:
                 raise
-            return FetchResponse(cached["body"], cached.get("etag"), cached.get("last_modified"), True)
-        except urllib.error.URLError:
-            if attempt:
-                raise
-    with response:
-        final_url = response.geturl()
-        if not _safe_fetch_url(final_url, allow_hosts):
-            raise ValueError(f"Fetch redirected outside allowed HTTPS hosts: {final_url}")
-        if getattr(response, "status", 200) == 304:
-            if cached is None:
-                raise ValueError("304 response without cached content")
-            return FetchResponse(cached["body"], cached.get("etag"), cached.get("last_modified"), True)
-        raw = response.read(2_000_001)
-        if len(raw) > 2_000_000:
-            raise ValueError("Source response exceeds 2 MB")
-        charset = response.headers.get_content_charset() or "utf-8"
-        return FetchResponse(raw.decode(charset, errors="replace"), response.headers.get("ETag"), response.headers.get("Last-Modified"))
+            if proxy_mode == "direct":
+                time.sleep(0.5 * attempt)
 
 
 def _blocked_host(hostname: str) -> bool:
@@ -391,23 +470,57 @@ class HTMLIndexAdapter:
         return list(deduped.values())
 
 
-ADAPTERS: dict[str, SourceAdapter] = {"rss": RSSAdapter(), "atom": AtomAdapter(), "html_index": HTMLIndexAdapter(), "json_index": JSONIndexAdapter()}
+class DiscoveryJSONAdapter:
+    """Baidu's same-origin board JSON; leads only, never a verified factual source.
+
+    Reuse the existing HTML index admission rules on JSON title/link pairs.
+    No JS execution, unofficial mirrors, detail requests or model calls.
+    """
+    def parse(self, source: SourceDefinition, body: str, on_decision=None) -> list[SourceItem]:
+        if source.source_role != "discovery" or source.tier != 4:
+            raise ValueError("discovery_json is restricted to tier 4 discovery sources")
+        payload = json.loads(body)
+        cards = payload.get("data", {}).get("cards") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else None
+        if not isinstance(payload, dict) or payload.get("success") is not True or not isinstance(cards, list):
+            raise ValueError("Discovery JSON board schema unavailable")
+        rows = []
+        for card in cards:
+            if not isinstance(card, dict) or not isinstance(card.get("content"), list):
+                raise ValueError("Discovery JSON card schema unavailable")
+            rows.extend(card["content"])
+        anchors = []
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                if on_decision: on_decision(source, "discovery_json", index, "", "", None, "dropped", "malformed_article")
+                continue
+            title, url = row.get("word", ""), row.get("rawUrl") or row.get("url", "")
+            if not isinstance(title, str) or not isinstance(url, str):
+                if on_decision: on_decision(source, "discovery_json", index, "", "", None, "dropped", "malformed_article")
+                continue
+            anchors.append(f'<a href="{escape(url, quote=True)}">{escape(title)}</a>')
+        def decision(src, kind, *args):
+            if on_decision: on_decision(src, "discovery_json" if kind == "html" else kind, *args)
+        return HTMLIndexAdapter().parse(source, "".join(anchors), on_decision=decision if on_decision else None)
+
+
+ADAPTERS: dict[str, SourceAdapter] = {"rss": RSSAdapter(), "atom": AtomAdapter(), "html_index": HTMLIndexAdapter(), "json_index": JSONIndexAdapter(),
+                                    "discovery_json": DiscoveryJSONAdapter()}
 
 
 def collect_source_items(source: SourceDefinition) -> list[SourceItem]:
     """Collect without changing persistent cache; useful for checks and one-off callers."""
     if not source.enabled:
         return []
-    return ADAPTERS[source.adapter].parse(source, fetch(source.url, allow_hosts=source.allow_hosts))
+    return ADAPTERS[source.adapter].parse(source, fetch(source.url, **source.fetch_options()))
 
 
 def collect_source(source: SourceDefinition, cache: SourceCache | None = None, *, on_decision=None) -> SourceCollection:
     if not source.enabled:
         return SourceCollection((), "disabled")
     cached = cache.get_source_cache(source.source_id, source.url) if cache and source.conditional_requests else None
-    response = fetch_response(source.url, cached=cached, allow_hosts=source.allow_hosts)
+    response = fetch_response(source.url, cached=cached, **source.fetch_options())
     items = tuple(ADAPTERS[source.adapter].parse(source, response.body, on_decision=on_decision) if on_decision else ADAPTERS[source.adapter].parse(source, response.body))
     if cache and not response.not_modified:
         cache.save_source_cache(source.source_id, source.url, response.body, response.etag, response.last_modified)
     return SourceCollection(items, "ok" if items else "empty", response.not_modified,
-                            bool(cached and (cached.get("etag") or cached.get("last_modified"))))
+                            bool(cached and (cached.get("etag") or cached.get("last_modified"))), response.request_history)
