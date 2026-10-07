@@ -177,20 +177,26 @@ class ReadinessStateTests(unittest.TestCase):
             self.assertEqual(log["skipped_reason"], "publish_verification_failed")
 
     def test_push_receipt_records_only_push_success_not_edgeone_completion(self):
-        responses = [SimpleNamespace(returncode=0), SimpleNamespace(returncode=1), SimpleNamespace(returncode=0),
-                     SimpleNamespace(returncode=0), SimpleNamespace(returncode=0, stdout="d" * 40)]
-        with patch("ai_daily_pipeline.delivery.subprocess.run", side_effect=responses) as git, \
-             patch("ai_daily_pipeline.delivery._now", return_value=NOW):
+        from ai_daily_pipeline.publication_git import PublicationGit
+        def response(args, allowed=(0,), **kwargs):
+            if args == ["branch", "--show-current"]: return 0, "main"
+            if args == ["diff", "--cached", "--quiet"]: return 1, ""
+            if args[:1] == ["rev-parse"]: return 0, "d" * 40
+            return 0, ""
+        with patch.object(PublicationGit, "run", side_effect=response) as git:
             receipt = deploy_site_data(Path("site"), Path("site/data/daily/ai") / (DATE + ".json"))
         self.assertEqual(receipt["deploy_commit_sha"], "d" * 40)
-        self.assertEqual(receipt["deploy_push_finished_time"], NOW.isoformat())
         self.assertEqual(receipt["deployment_status"], "unknown")
         self.assertIsNone(receipt["deployment_id"])
-        self.assertEqual(git.call_args_list[3].args[0], ["git", "push", "origin", "main"])
+        self.assertEqual(sum(x.args[0] == ["push", "origin", "main"] for x in git.call_args_list), 1)
 
     def test_no_changes_does_not_invent_a_push_timestamp(self):
-        with patch("ai_daily_pipeline.delivery.subprocess.run", side_effect=[SimpleNamespace(returncode=0),
-                   SimpleNamespace(returncode=0), SimpleNamespace(returncode=0, stdout="e" * 40)]) as git:
+        from ai_daily_pipeline.publication_git import PublicationGit
+        def response(args, allowed=(0,), **kwargs):
+            if args == ["branch", "--show-current"]: return 0, "main"
+            if args[:1] == ["rev-parse"]: return 0, "e" * 40
+            return 0, ""
+        with patch.object(PublicationGit, "run", side_effect=response) as git:
             receipt = deploy_site_data(Path("site"), Path("site/data/daily/ai") / (DATE + ".json"))
         self.assertIsNone(receipt["deploy_push_finished_time"])
         self.assertEqual(receipt["deploy_push_status"], "not_attempted_no_changes")

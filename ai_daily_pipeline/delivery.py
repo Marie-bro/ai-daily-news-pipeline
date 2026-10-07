@@ -436,32 +436,16 @@ def send_existing_report(pipeline_root: Path, site_root: Path, report_date: str,
         append_run_log(pipeline_root, record)
 
 
-def deploy_site_data(site_root: Path, report_path: Path) -> dict[str, object]:
+def deploy_site_data(site_root: Path, report_path: Path, *, diagnostic_path: Path | None = None) -> dict[str, object]:
+    from .publication_git import deploy, PublicationGitError
     try:
-        relative_report = report_path.relative_to(site_root)
+        return deploy(site_root, report_path, diagnostic_path=diagnostic_path, now=_now)
+    except PublicationGitError as exc:
+        failure = DeliveryError("site data deployment failed")
+        failure.diagnostics = exc.diagnostics
+        raise failure from exc
     except ValueError as exc:
         raise DeliveryError("report path is outside the site project") from exc
-    for command in (
-        ["git", "add", "--", str(relative_report), "data/reports.json"],
-        ["git", "diff", "--cached", "--quiet"],
-    ):
-        result = subprocess.run(command, cwd=site_root, capture_output=True, text=True, check=False)
-        if command[1:3] == ["diff", "--cached"]:
-            if result.returncode == 0:
-                return {"deploy_commit_sha": _deploy_commit_sha(site_root), "deploy_push_finished_time": None,
-                        "deploy_push_status": "not_attempted_no_changes", "deployment_id": None, "deployment_status": "unknown"}
-            if result.returncode != 1:
-                raise DeliveryError("cannot inspect staged site data")
-        elif result.returncode != 0:
-            raise DeliveryError("cannot stage site data")
-    date = relative_report.stem
-    for command in (["git", "commit", "-m", f"Publish Tech Daily {date}"], ["git", "push", "origin", "main"]):
-        result = subprocess.run(command, cwd=site_root, capture_output=True, text=True, check=False)
-        if result.returncode != 0:
-            raise DeliveryError("site data deployment failed")
-    push_finished_time = _now().isoformat()
-    return {"deploy_commit_sha": _deploy_commit_sha(site_root), "deploy_push_finished_time": push_finished_time,
-            "deploy_push_status": "pushed", "deployment_id": None, "deployment_status": "unknown"}
 
 
 def _deploy_commit_sha(site_root: Path) -> str | None:
@@ -506,15 +490,18 @@ def _run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool
                   "publishable_count": 0}
         append_run_log(pipeline_root, record)
         return DeliveryResult(current.date().isoformat(), None, "daily_failed" if budget_failed else "skipped", reason, None, None, 0)
+    report_path = None
     try:
         report_path = publish_latest_report(pipeline_root, site_root)
-        deployment = deploy_site_data(site_root, report_path)
+        deployment = deploy_site_data(site_root, report_path, diagnostic_path=pipeline_root / "data/publication-git.jsonl")
         if audit: audit.metrics.update(deployment)
-    except (PublishError, DeliveryError):
+    except (PublishError, DeliveryError) as exc:
+        diagnostics = getattr(exc, "diagnostics", {})
+        if audit: audit.metrics.update(diagnostics)
         append_run_log(pipeline_root, {"run_date": current.date().isoformat(), "start_time": current.isoformat(), "end_time": _now(now).isoformat(),
-                                      "candidate_count": enrichment.candidates, "selected_count": enrichment.saved, "report_generated": False, "report_url": None,
+                                      "candidate_count": enrichment.candidates, "selected_count": enrichment.saved, "report_generated": report_path is not None, "report_url": None,
                                       "url_reachable": False, "feishu_send_attempted": False, "feishu_send_result": None, "message_id": None,
-                                      "skipped_reason": "publication_or_deployment_failed", "retry_count": 0})
+                                      "skipped_reason": "publication_or_deployment_failed", "retry_count": 0, **diagnostics})
         return DeliveryResult(current.date().isoformat(), None, "skipped", "publication_or_deployment_failed", None, None, 0)
     return send_existing_report(pipeline_root, site_root, report_path.stem, force=force, now=now,
                                 deployment_context=deployment, audit=audit)
