@@ -23,6 +23,29 @@ def http_error(status):
 
 
 class RetryTests(unittest.TestCase):
+    def test_incomplete_generation_records_finish_reason_and_usage_without_retry(self):
+        response = Response({"choices": [{"finish_reason": "length", "message": {"content": '{"items":[]}'}}],
+                             "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}})
+        client, result, error, calls, delays = self.run_sequence([response])
+        self.assertIsNone(result)
+        self.assertIsNotNone(error)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(delays, [])
+        attempt = client.last_attempt_history[0]
+        self.assertEqual(attempt["finish_reason"], "length")
+        self.assertEqual(attempt["usage"]["total_tokens"], 10)
+        self.assertTrue(attempt["complete_response_received"])
+        self.assertFalse(attempt["usage_recorded"])
+
+    def test_complete_generation_records_safe_numeric_usage_only(self):
+        response = Response({"choices": [{"finish_reason": "stop", "message": {"content": '{"items":[]}'}}],
+                             "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10,
+                                       "private_text": "must not appear in diagnostic usage"}})
+        client, result, error, calls, delays = self.run_sequence([response])
+        self.assertIsNone(error)
+        self.assertEqual(client.last_attempt_history[0]["finish_reason"], "stop")
+        self.assertNotIn("private_text", client.last_attempt_history[0]["usage"])
+
     def run_sequence(self, outcomes):
         calls = []
         delays = []

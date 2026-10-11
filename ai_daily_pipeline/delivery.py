@@ -493,6 +493,13 @@ def _run_scheduled_delivery(pipeline_root: Path, site_root: Path, *, force: bool
     report_path = None
     try:
         report_path = publish_latest_report(pipeline_root, site_root)
+        if audit:
+            # Observation only; failure to read the artifact must not affect deployment.
+            try:
+                artifact = json.loads(report_path.read_text(encoding="utf-8"))
+                audit.metrics["report_written_article_ids"] = [item["article_id"] for item in artifact["items"]]
+            except (OSError, ValueError, KeyError, TypeError):
+                audit.metrics["report_written_article_ids"] = None
         deployment = deploy_site_data(site_root, report_path, diagnostic_path=pipeline_root / "data/publication-git.jsonl")
         if audit: audit.metrics.update(deployment)
     except (PublishError, DeliveryError) as exc:

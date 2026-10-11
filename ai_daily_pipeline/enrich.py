@@ -378,6 +378,9 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
         if audit:
             audit.inventory_origin_events(inventory)
             for article in inventory:
+                audit.event(article, "enrichment_cache", "observed", "cache_hit" if article.id in cached else "cache_miss",
+                            {"importance_score": cached[article.id].importance_score if article.id in cached else None})
+            for article in inventory:
                 if _eligible_content(article):
                     audit.event(article, "content_gate", "kept", "eligible_content")
                 else:
@@ -497,6 +500,7 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
             audit.metrics["enrichment_failure"] = last_failure
             audit.metrics["model_request_attempts"] = request_attempts
             audit.metrics["model_batches"] = batch_records
+            audit.metrics["token_budget"] = dict(budget_metadata)
             audit.enrichment_sets(attempted)
             # One final deterministic selector pass provides reasons without another model request.
             ready = [replace(article, category=all_enriched[article.id].category) for article in inventory if article.id in all_enriched]
@@ -606,12 +610,15 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                     if fallback:
                         stats["fallback_added"] += 1
                     audit_entries.append(_audit_entry(result))
-                    if audit: audit.event(result.article, "validation", "kept", "model_accepted")
+                    if audit: audit.event(result.article, "validation", "kept", "model_accepted",
+                                          {"importance_score": result.enrichment.importance_score})
                     continue
                 issue = result.error if isinstance(result.error, BilingualValidationError) else None
                 if audit:
                     audit.event(result.article, "validation", "dropped", issue.stage if issue else "schema_invalid",
-                                {"error_type": type(result.error).__name__ if result.error else None})
+                                {"error_type": type(result.error).__name__ if result.error else None,
+                                 "validation_reason": issue.reason if issue else str(result.error),
+                                 "repair_fields": list(issue.repair_fields) if issue else []})
                 if issue and issue.stage == "hard_facts":
                     stats["hard_fact_rejected"] += 1
                 elif issue and issue.stage == "semantic":
@@ -629,6 +636,8 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                     if audit: audit.event(result.article, "repair", "dropped", "token_guard")
                     continue
                 try:
+                    if audit: audit.event(result.article, "repair", "started", "field_repair_requested",
+                                          {"batch_index": batch_counter, "fields": list(issue.repair_fields)})
                     client.request_context = {"batch_id": f"repair-{batch_counter}-{result.article.id}",
                                               "article_ids": [result.article.id]}
                     repaired_content, repair_usage, repair_model = client.complete_json(
@@ -646,7 +655,9 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                                            created_at=now.isoformat(), usage=repair_error.usage)
                         client.mark_usage_recorded()
                     audit_entries.append({**_audit_entry(result), "repair_attempted": True, "repair_result": str(repair_error)})
-                    if audit: audit.event(result.article, "repair", "dropped", "repair_failed", {"error_type": type(repair_error).__name__})
+                    if audit: audit.event(result.article, "repair", "dropped", "repair_failed",
+                                          {"error_type": type(repair_error).__name__,
+                                           "validation_reason": repair_error.reason if isinstance(repair_error, BilingualValidationError) else type(repair_error).__name__})
                     continue
                 generated.append(repaired.enrichment)
                 all_enriched[repaired.article.id] = repaired.enrichment
@@ -658,7 +669,8 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                 audit_entries.append({**_audit_entry(repaired, repaired=True), "initial_reject_stage": issue.stage, "initial_reject_reason": issue.reason})
                 if audit:
                     audit.event(repaired.article, "repair", "kept", "repair_succeeded", {"initial_reject_stage": issue.stage})
-                    audit.event(repaired.article, "validation", "kept", "accepted_after_repair")
+                    audit.event(repaired.article, "validation", "kept", "accepted_after_repair",
+                                {"importance_score": repaired.enrichment.importance_score})
             store.commit()
             return True
 
@@ -719,7 +731,10 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                     record_final_audit()
                 if audit:
                     reason = "model_request_failed" if isinstance(exc, DeepSeekError) and exc.model_request_failed else "batch_failed"
-                    for article in articles: audit.event(article, stage, "dropped", reason, {"batch_index": batch_counter, "error_type": type(exc).__name__})
+                    for article in articles: audit.event(article, stage, "dropped", reason,
+                        {"batch_index": batch_counter, "error_type": type(exc).__name__,
+                         "failure_summary": last_failure.get("error_summary"),
+                         "publishable_at_failure": len(publishable), "degraded_daily_entered": last_failure["degraded_daily_entered"]})
                 try:
                     persist_audit()
                 except OSError:
@@ -766,9 +781,11 @@ def run_enrichment(root: Path, *, dry_run: bool = False, now: datetime | None = 
                and len(publishable) < rules["target"] and diagnostics.get("today_locked", 0) < rules["minimum"]):
             fallback_history = _record_attempted_as_history(past, attempted)
             fallback_chosen, _, _ = select(inventory, now, rules, fallback_history, cached, limit=daily_limit,
+                on_decision=(lambda a, st, status, reason, detail: audit.event(a, "fallback_" + st, status, reason, detail)) if audit else None,
                 supply_layers={ident:meta['supply_layer'] for ident,meta in reserve.items() if meta['reserve_status']=='eligible'})
             fallback_articles = [article for article in fallback_chosen if article.id not in all_enriched and article.id not in {item.id for item in attempted}]
             if not fallback_articles:
+                if audit: audit.metrics["fill_stop_reason"] = "no_untried_candidate_returned_by_existing_selector"
                 break
             needed = max(1, rules["target"] - len(publishable))
             batch = fallback_articles[:min(model_batch_size, max(3, needed * 2))]

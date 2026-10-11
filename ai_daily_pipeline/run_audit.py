@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from .text import article_id
 from .exit_status import validate_exit_audit
+from .audit_views import build_inspection, inspection_html
 
 
 def write_viewer(json_path: Path, data: dict) -> Path:
@@ -33,15 +34,17 @@ def write_viewer(json_path: Path, data: dict) -> Path:
         link = f'<a href="{escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">Original URL</a>' if safe_url else escape(url)
         rows = "".join('<tr><td>'+escape(str(e.get("stage", "")))+'</td><td>'+escape(str(e.get("status", "")))+'</td><td>'+escape(str(e.get("reason", "")))+'</td><td><code>'+escape(json.dumps(e.get("detail") or {}, ensure_ascii=False))+'</code></td></tr>' for e in entry.get("events", []))
         sections.append(f'<details id="{ident}"><summary>{source} ? {title} <small>{status}</small></summary><p><code>{ident}</code> ? {link}</p><table><thead><tr><th>Stage</th><th>Status</th><th>Reason</th><th>Detail</th></tr></thead><tbody>{rows}</tbody></table></details>')
-    summary = {k: v for k, v in data.items() if k not in {"articles", "articles_107", "accepted_13", "sources", "usage_rows"}}
+    summary = {k: v for k, v in data.items() if k not in {"articles", "articles_107", "accepted_13", "sources", "usage_rows", "inspection"}}
+    inspection = data.get("inspection") or build_inspection(data)
     html = ('<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             '<title>MarieSpace Run Audit</title><style>body{font:15px/1.55 system-ui,sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem;color:#172332}'
             'details{border:1px solid #cbd5df;border-radius:8px;margin:.6rem 0;padding:.8rem}summary{cursor:pointer;font-weight:600}'
             'small{color:#516577}table{width:100%;border-collapse:collapse;overflow-wrap:anywhere}th,td{text-align:left;border-bottom:1px solid #ddd;padding:.4rem}'
-            'pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f5f8;padding:1rem}code{overflow-wrap:anywhere}</style>'
+            'pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f5f8;padding:1rem}code,summary{overflow-wrap:anywhere}'
+            '.audit-scroll{overflow-x:auto;max-width:100%}.audit-scroll th,.audit-scroll td{min-width:75px}</style>'
             '<h1>MarieSpace Run Audit</h1><p>Local audit only. Offline reconstruction is explicitly marked; no report was published by this viewer.</p>'
             '<h2>Run summary</h2><pre>'+escape(json.dumps(summary, ensure_ascii=False, indent=2))+'</pre><h2>Articles</h2>'
-            + "".join(sections) + '</html>')
+            + inspection_html(inspection) + "".join(sections) + '</html>')
     target = json_path.with_suffix(".html")
     target.write_text(html, encoding="utf-8")
     return target
@@ -54,10 +57,11 @@ class RunAudit:
         self.run_id = started_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid.uuid4().hex[:8]
         self.sources = []
         self.traces = {}
-        self.metrics = {}
+        self.metrics = {"report_written_article_ids": [], "published_article_ids": []}
         self.flows = {"collection": {}, "inventory_candidate": {}}
         self.final_status = "running"
         self._lock = Lock()
+        self.parser_counts = Counter()
 
     def item(self, value):
         url = getattr(value, "url", getattr(value, "original_url", None))
@@ -99,7 +103,12 @@ class RunAudit:
                                 title=title, original_url=url or None, published_at=published_at)
         self.event(entry, "adapter_" + adapter, status, reason, {"index": index})
         with self._lock:
-            self.metrics["raw_index_entries_seen"] = self.metrics.get("raw_index_entries_seen", 0) + int(adapter in {"rss", "atom", "json", "html"})
+            raw_entry = adapter in {"rss", "atom", "json", "html", "discovery_json"}
+            self.metrics["raw_index_entries_seen"] = self.metrics.get("raw_index_entries_seen", 0) + int(raw_entry)
+            if raw_entry:
+                self.parser_counts[status] += 1
+            elif adapter in {"feed_cap", "html_dedup"} and status == "dropped":
+                self.parser_counts["postparse_dropped"] += 1
 
     def source(self, source_id, status, count=0, detail=None):
         with self._lock:
@@ -123,6 +132,14 @@ class RunAudit:
             "newly_inserted_article": {**self._set(set(inserted_ids)),
                                        "basis": "ArticleStore.add returned inserted=True"},
         }
+        # Prove the parser accounting identity before reporting a drop total.
+        # A partial parser/source failure breaks the identity and stays unknown.
+        kept = self.parser_counts["kept"] - self.parser_counts["postparse_dropped"]
+        total = self.parser_counts["kept"] + self.parser_counts["dropped"]
+        if total == self.metrics.get("raw_index_entries_seen") and kept == len(source_items):
+            self.flows["collection"]["raw_index"].update(
+                observed_dropped_to_source_items=self.parser_counts["dropped"] + self.parser_counts["postparse_dropped"],
+                accounting_basis="raw kept/dropped parser decisions plus feed-cap/index-dedup decisions reconcile exactly with returned SourceItem objects")
 
     def inventory_origin_events(self, inventory):
         """Mark inventory origin before any later filter can drop the article."""
@@ -176,13 +193,17 @@ class RunAudit:
         if status is not None:
             self.final_status = status
         self.metrics.update(metrics)
+        written = self.metrics.get("report_written_article_ids")
+        if self.metrics.get("readiness_result") == "ready" and isinstance(written, list):
+            self.metrics["published_article_ids"] = list(written)
+        published = set(self.metrics.get("published_article_ids") or [])
         with self._lock:
             traces = list(self.traces.values())
             sources = list(self.sources)
         for trace in traces:
             if trace["final_status"] == "publishable_candidate":
-                trace["final_status"] = "published" if self.metrics.get("report_id") else "not_published"
-                trace["final_reason"] = None if self.metrics.get("report_id") else self.metrics.get("skipped_reason") or "run_ended_before_publication"
+                trace["final_status"] = "published" if trace["article_id"] in published else "not_published"
+                trace["final_reason"] = None if trace["article_id"] in published else self.metrics.get("skipped_reason") or "run_ended_before_publication"
             elif trace["final_status"] in {"not_yet_selected", "in_progress"}:
                 trace["final_status"] = "not_selected_or_not_reached"
                 trace["final_reason"] = "run_ended_before_later_stages"
@@ -197,6 +218,7 @@ class RunAudit:
                 "final_status": self.final_status,
                 "exit_code": self.metrics.get("exit_code"), "exit_reason": self.metrics.get("exit_reason"),
                 "articles": sorted(traces, key=lambda t: t["trace_id"])}
+        data["inspection"] = build_inspection(data)
         dest = self.root / "data" / "run-audits"
         dest.mkdir(parents=True, exist_ok=True)
         path = dest / (self.run_id + ".json")
