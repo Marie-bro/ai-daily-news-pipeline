@@ -14,6 +14,7 @@ from ai_daily_pipeline.exit_status import delivery_exit_outcome
 class DiagnosticsTests(unittest.TestCase):
     def test_error_classes(self):
         for message, expected in [("Could not resolve host", "dns_network"), ("SSL certificate failure", "tls"),
+                                  ("fatal: Unsupported SSL backend 'openssl'", "tls_backend_unavailable"),
                                   ("Authentication failed", "authentication"), ("non-fast-forward", "non_fast_forward"),
                                   ("remote rejected", "remote_rejected"), ("Repository not found", "repository_unavailable"),
                                   ("timed out", "timeout"), ("unexpected", "unknown")]:
@@ -110,12 +111,67 @@ class LocalRepositoryTests(unittest.TestCase):
         self.assertEqual(receipt["publish_push_exit_code"], 0)
         self.assertIsNotNone(receipt["deploy_push_finished_time"])
         self.assertEqual(receipt["deployment_status"], "unknown")
+        self.assertEqual(receipt["publish_tls_backend"], "openssl")
+        self.assertEqual(receipt["publish_local_head_after_push"], self.git("rev-parse", "HEAD"))
+        self.assertEqual(receipt["publish_upstream_head_after_push"], self.git("rev-parse", "origin/main"))
+        push = next(item for item in receipt["publish_git_commands"] if "push" in item["command"])
+        self.assertEqual(push["command"], ["git", "-c", "http.sslBackend=openssl", "-c", "http.sslVerify=true",
+                                           "push", "origin", "main"])
+        self.assertEqual(self.git("config", "--local", "--get", "user.name"), "Test")
+        backend = subprocess.run(["git", "config", "--local", "--get", "http.sslBackend"],
+                                 cwd=self.site, capture_output=True, text=True)
+        self.assertEqual(backend.returncode, 1)  # Command-level override did not persist.
         self.assertEqual(self.git("rev-parse", "HEAD"), self.git("rev-parse", "origin/main"))
+
+    def test_existing_git_proxy_is_reused_without_logging_its_address(self):
+        self.git("config", "http.proxy", "http://name:secret@127.0.0.1:7897")
+        receipt = deploy(self.site, self.report)
+        self.assertEqual(receipt["publish_proxy_mode"], "existing_git_config")
+        self.assertNotIn("name:secret", json.dumps(receipt))
+        self.assertNotIn("7897", json.dumps(receipt))
+
+    def test_proxy_address_in_git_error_is_masked(self):
+        self.git("config", "http.proxy", "http://name:secret@127.0.0.1:7897")
+        git = PublicationGit(self.site, push_tls_backend="openssl")
+        git.inspect()
+        with patch("ai_daily_pipeline.publication_git.subprocess.run",
+                   return_value=SimpleNamespace(returncode=128, stdout="",
+                                                stderr="Failed to connect to 127.0.0.1 port 7897")):
+            with self.assertRaises(PublicationGitError) as raised:
+                git.run(["push", "origin", "main"])
+        self.assertIn("[PROXY]", raised.exception.diagnostics["publish_push_stderr_safe"])
+        self.assertNotIn("7897", json.dumps(raised.exception.diagnostics))
+
+    def test_missing_openssl_fails_explicitly_without_schannel_fallback(self):
+        real_run = subprocess.run
+        pushes = []
+        def unsupported(command, **kwargs):
+            if "push" in command:
+                pushes.append(command)
+                return SimpleNamespace(returncode=128, stdout="", stderr="fatal: Unsupported SSL backend 'openssl'")
+            return real_run(command, **kwargs)
+        with patch("ai_daily_pipeline.publication_git.subprocess.run", side_effect=unsupported):
+            with self.assertRaises(PublicationGitError) as raised:
+                deploy(self.site, self.report)
+        receipt = raised.exception.diagnostics
+        self.assertEqual(receipt["publish_push_status"], "failed")
+        self.assertEqual(receipt["publish_push_error_class"], "tls_backend_unavailable")
+        self.assertEqual(len(pushes), 1)
+        self.assertIn("http.sslBackend=openssl", pushes[0])
+        self.assertFalse(any("schannel" in str(arg).lower() for arg in pushes[0]))
+
+    def test_push_ignores_no_verify_environment_only_for_this_command(self):
+        git = PublicationGit(self.site, push_tls_backend="openssl")
+        with patch.dict("os.environ", {"GIT_SSL_NO_VERIFY": "1"}), \
+             patch("ai_daily_pipeline.publication_git.subprocess.run", return_value=SimpleNamespace(returncode=0, stdout="", stderr="")) as run:
+            git.run(["push", "origin", "main"])
+        self.assertNotIn("GIT_SSL_NO_VERIFY", run.call_args.kwargs["env"])
+        self.assertIn("http.sslVerify=true", run.call_args.args[0])
 
     def test_failed_push_then_same_data_pushes_existing_commit(self):
         real_run = subprocess.run
         def fail_push(command, **kwargs):
-            if command[1] == "push": return SimpleNamespace(returncode=128, stdout="", stderr="SSL EOF")
+            if "push" in command: return SimpleNamespace(returncode=128, stdout="", stderr="SSL EOF")
             return real_run(command, **kwargs)
         with patch("ai_daily_pipeline.publication_git.subprocess.run", side_effect=fail_push):
             with self.assertRaises(PublicationGitError): deploy(self.site, self.report)
