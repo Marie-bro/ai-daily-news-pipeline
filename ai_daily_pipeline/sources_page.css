@@ -1,4 +1,6 @@
 :root{color-scheme:light;font-family:Inter,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;color:#17253c;background:#f5f7fb}
+.source-card,.article-card,.source-list,.article-list{min-width:0}.source-card summary,.article-card summary,.source-meta,.article-meta{overflow-wrap:anywhere}.audit-json{max-width:100%}
+.audit-scroll{overflow-x:auto;max-width:100%;border:1px solid #dee6ee;border-radius:10px;background:white;margin:12px 0}.audit-scroll table{border-collapse:collapse;width:100%;font-size:.8rem}.audit-scroll th,.audit-scroll td{padding:9px;border-bottom:1px solid #edf1f5;text-align:left;vertical-align:top;overflow-wrap:anywhere;min-width:80px}.audit-json{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.78rem}.metric strong{overflow-wrap:anywhere}
 *{box-sizing:border-box}body{margin:0}.shell{max-width:1200px;margin:auto;padding:clamp(16px,3vw,38px)}
 .masthead{border-radius:22px;padding:clamp(24px,4vw,48px);color:#f7fbff;background:linear-gradient(125deg,#13243f,#194477 62%,#267c99);box-shadow:0 18px 40px #17427118}
 .eyebrow{font-size:.72rem;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:#80b3da}.masthead .eyebrow{color:#a9d9f6}

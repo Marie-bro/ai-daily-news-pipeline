@@ -63,6 +63,8 @@ function articleCard(article, fullTrace = false) {
       details.addEventListener("toggle", () => {
         if (!details.open || details.dataset.loaded) return;
         details.dataset.loaded = "true";
+        if (article.screening_outcome)
+          details.append(node("pre", "audit-json", JSON.stringify(article.screening_outcome, null, 2)));
         if (!article.events.length) details.append(node("p", "empty", "Trace events: unavailable"));
         for (const event of article.events) {
           const line = node("div", "trace-event");
@@ -74,7 +76,10 @@ function articleCard(article, fullTrace = false) {
       card.append(details);
     }
   }
-  if (article.reason && article.reason !== "unavailable") card.append(node("div", "reason", `Reason / 原因：${article.reason}`));
+  const outcome = article.screening_outcome;
+  if (outcome) card.append(node("div", "article-meta", `${outcome.origin} · ${outcome.cache} · importance: ${outcome.importance_score} · model: ${outcome.model_submitted}`));
+  const finalReason = outcome ? outcome.final_reason : article.reason;
+  if (finalReason && finalReason !== "unavailable") card.append(node("div", "reason", `Final reason / 最终原因：${finalReason}`));
   return card;
 }
 function renderArticles(target, articles, fullTrace = false) {
@@ -99,7 +104,62 @@ function metric(number, label) {
   box.append(node("strong", "", number), node("span", "", label));
   return box;
 }
+function auditTable(rows, fields) {
+  const wrapper = node("div", "audit-scroll");
+  const table = node("table");
+  const head = node("tr");
+  fields.forEach(field => head.append(node("th", "", field)));
+  table.append(head);
+  for (const row of rows) {
+    const line = node("tr");
+    fields.forEach(field => {
+      const value = row[field] === undefined ? "not_observable" : row[field];
+      line.append(node("td", "", typeof value === "object" ? JSON.stringify(value) : value));
+    });
+    table.append(line);
+  }
+  wrapper.append(table);
+  return wrapper;
+}
+function renderInspection(view) {
+  const target = $("inspection");
+  target.replaceChildren(node("h2", "", "完整筛选过程 / Run Inspection"));
+  if (!view) { target.append(node("p", "empty", "not_observable：没有本次 Run Audit")); return; }
+  target.append(node("p", "source-explain", view.note));
+  target.append(node("h3", "", "Today / Reserve"), node("pre", "audit-json", JSON.stringify(view.supply_summary, null, 2)));
+  target.append(node("h3", "", "采集链路"), auditTable(view.collection, ["stage", "input", "kept", "dropped", "basis"]));
+  target.append(node("h3", "", "库存 / 筛选链路"), node("p", "", `Current Run Inventory ${view.inventory_origins.current_run} + Historical Inventory ${view.inventory_origins.historical}`),
+    auditTable(view.inventory, ["stage", "input", "kept", "dropped", "basis"]));
+  target.append(node("h3", "", "模型 / 发布链路"), node("p", "", `Published (正式 readiness 已验证): ${view.published_count}`),
+    auditTable(view.model_pipeline, ["stage", "input", "kept", "dropped", "not_reached", "basis"]),
+    auditTable(view.batches, ["batch_id", "batch_size", "payload_bytes", "input_tokens", "output_tokens", "total_tokens", "finish_reason", "validation_passed", "repair_attempts", "repair_successes", "failure_type", "publishable_at_failure", "degraded_daily_entered"]));
+  target.append(node("h3", "", "淘汰原因统计"), node("p", "source-explain", "实际决策次数；同一篇可能在多个阶段被观察，不能累加成独立文章数。"),
+    auditTable(view.stages, ["stage", "input", "kept", "dropped", "other", "reasons"]));
+  for (const batch of view.batches) {
+    const details = node("details", "source-card");
+    details.append(node("summary", "", `${batch.batch_id} · 模型请求与文章 IDs`),
+      node("pre", "audit-json", JSON.stringify(batch, null, 2)));
+    target.append(details);
+  }
+  for (const [label, key] of [["Selected Candidate（含补位）", "selected_candidates"], ["候选池最终去向", "candidate_outcomes"], ["最终日报来源解释", "published"]]) {
+    const details = node("details", "source-card");
+    details.append(node("summary", "", `${label} · ${view[key].length}`));
+    details.addEventListener("toggle", () => {
+      if (!details.open || details.dataset.loaded) return;
+      details.dataset.loaded = "true";
+      for (const row of view[key]) {
+        const article = node("details", "article-card");
+        article.append(node("summary", "", `${row.title} · ${row.final_reason}`));
+        article.append(traceLink(row));
+        article.append(node("pre", "audit-json", JSON.stringify(row, null, 2)));
+        details.append(article);
+      }
+    });
+    target.append(details);
+  }
+}
 function render(data) {
+  renderInspection(data.inspection);
   const configuredSources = data.sources.filter(item => item.source_id !== "unassigned");
   const parsedTotal = configuredSources.reduce((total, item) => total + (Number.isInteger(item.article_count) ? item.article_count : 0), 0);
   const knownCounts = configuredSources.every(item => Number.isInteger(item.article_count));

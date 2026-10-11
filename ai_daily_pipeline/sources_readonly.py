@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from .sources import load_sources
+from .audit_views import build_inspection
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 UNAVAILABLE = "unavailable"
@@ -257,6 +258,10 @@ def sources_for_date(root: Path, requested_date: str, run_id: str | None = None)
     sqlite_rows = _sqlite_metadata(root, [value for value in ids if isinstance(value, str)])
     articles = [_article(row, sqlite_rows.get(row.get("article_id") or row.get("id") or row.get("trace_id")), origin)
                 for row in raw_rows if isinstance(row, dict)]
+    inspection = build_inspection(chosen) if chosen else None
+    if inspection:
+        for article in articles:
+            article["screening_outcome"] = inspection["article_outcomes"].get(article["article_id"])
     articles.sort(key=lambda row: (_time_key(row["published_at"]), row["article_id"]), reverse=True)
     groups = {source.source_id: [] for source in current_sources}
     unassigned = []
@@ -282,6 +287,7 @@ def sources_for_date(root: Path, requested_date: str, run_id: str | None = None)
                         "status": UNAVAILABLE, "article_count": UNAVAILABLE,
                         "visible_article_count": len(unassigned), "articles": unassigned})
     return {"date": requested_date, "run_id": chosen["run_id"] if chosen else run_options[0]["run_id"] if run_options else UNAVAILABLE,
+            "inspection": inspection,
             "runs": run_options, "source_count": len(current_sources), "source_status_provenance": source_provenance,
             "article_provenance": origin, "articles": articles, "visible_article_count": len(articles),
             "sources": sources, "notice": (
