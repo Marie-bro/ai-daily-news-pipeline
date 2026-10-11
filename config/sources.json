@@ -313,7 +313,7 @@
     "health_status": "active",
     "source_role": "primary",
     "channel": ["technology"],
-    "proxy_mode": "direct"
+    "network_route": "direct"
   },
   {
     "id": "ithome-news",
@@ -362,7 +362,7 @@
     "category": ["policy", "industry", "chips", "software", "infrastructure", "employment", "opportunities"],
     "tier": 1, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "primary",
     "channel": ["policy_economy", "technology", "future_opportunities"],
-    "proxy_mode": "direct"
+    "network_route": "direct"
   },
   {
     "id": "moe-updates", "name": "教育部", "source_type": "official_policy", "adapter": "html_index",
@@ -371,7 +371,7 @@
     "category": ["education", "employment", "policy", "opportunities"],
     "tier": 1, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "primary",
     "channel": ["future_opportunities", "policy_economy"],
-    "proxy_mode": "direct"
+    "network_route": "direct"
   },
   {
     "id": "national-data-policy", "name": "国家数据局", "source_type": "official_policy", "adapter": "html_index",
@@ -388,7 +388,7 @@
     "category": ["economy", "industry", "employment", "society"],
     "tier": 1, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "primary",
     "channel": ["policy_economy", "society_trends", "future_opportunities"],
-    "proxy_mode": "direct"
+    "network_route": "direct"
   },
   {
     "id": "most-updates", "name": "科学技术部", "source_type": "official_policy", "adapter": "html_index",
@@ -397,7 +397,7 @@
     "category": ["policy", "science", "industry", "education", "opportunities"],
     "tier": 1, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "primary",
     "channel": ["technology", "policy_economy", "future_opportunities"],
-    "proxy_mode": "direct"
+    "network_route": "direct"
   },
   {
     "id": "xinhua-tech", "name": "新华社", "source_type": "authoritative_media", "adapter": "html_index",
@@ -422,7 +422,7 @@
     "category": ["science", "education", "industry", "opportunities"],
     "tier": 2, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "media",
     "channel": ["technology", "future_opportunities", "deep_read"],
-    "proxy_mode": "direct"
+    "network_route": "direct"
   },
   {
     "id": "jiemian-industry", "name": "界面新闻", "source_type": "authoritative_media", "adapter": "html_index",
@@ -431,7 +431,7 @@
     "category": ["economy", "industry", "employment", "society", "infrastructure", "opportunities"],
     "tier": 2, "language": "zh", "fetch_method": "html_index", "health_status": "active", "source_role": "media",
     "channel": ["policy_economy", "society_trends", "future_opportunities"],
-    "proxy_mode": "direct"
+    "network_route": "direct"
   },
   {
     "id": "baidu-hotlist", "name": "百度热搜", "source_type": "hotspot_discovery", "adapter": "discovery_json",
@@ -440,7 +440,7 @@
     "category": ["society", "economy", "industry", "education", "employment", "opportunities", "other_tech"],
     "tier": 4, "language": "zh", "fetch_method": "discovery_json", "health_status": "active", "source_role": "discovery",
     "channel": ["society_trends", "policy_economy", "future_opportunities", "technology"],
-    "proxy_mode": "direct",
+    "network_route": "direct",
     "request_timeout_seconds": 6,
     "request_attempts": 1
   },

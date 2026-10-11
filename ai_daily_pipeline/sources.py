@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import json
+import os
 import posixpath
 import re
 import socket
@@ -88,9 +90,15 @@ class SourceDefinition:
     request_timeout_seconds: int = 12
     request_attempts: int = 2
 
+    @property
+    def network_route(self) -> str:
+        """Canonical route; proxy_mode remains a constructor alias for older callers."""
+        return self.proxy_mode
+
     def fetch_options(self) -> dict:
         return {"allow_hosts": self.allow_hosts, "proxy_mode": self.proxy_mode,
-                "timeout": self.request_timeout_seconds, "max_attempts": self.request_attempts}
+                "timeout": self.request_timeout_seconds, "max_attempts": self.request_attempts,
+                "source_id": self.source_id}
 
 
 @dataclass(frozen=True)
@@ -126,7 +134,7 @@ def load_sources(path: Path) -> list[SourceDefinition]:
         unknown = set(item) - {"id", "name", "source_type", "adapter", "url", "allow_hosts", "priority",
                                "article_path_pattern", "enabled", "cleaning", "conditional_requests", "region",
                                "category", "tier", "language", "fetch_method", "health_status", "source_role", "channel",
-                               "proxy_mode", "request_timeout_seconds", "request_attempts"}
+                               "proxy_mode", "network_route", "request_timeout_seconds", "request_attempts"}
         if unknown:
             raise ValueError(f"sources[{index}] has unknown fields: {', '.join(sorted(unknown))}")
         source_id = _required_string(item, "id", index)
@@ -177,11 +185,13 @@ def load_sources(path: Path) -> list[SourceDefinition]:
             raise ValueError(f"sources[{index}] discovery sources must use tier 4")
         if adapter == "discovery_json" and (source_role != "discovery" or tier != 4):
             raise ValueError("discovery_json is restricted to tier 4 discovery sources")
-        proxy_mode = item.get("proxy_mode", "system")
+        proxy_mode = item.get("network_route", item.get("proxy_mode", "system"))
         timeout = item.get("request_timeout_seconds", 12)
         attempts = item.get("request_attempts", 2)
-        if proxy_mode not in {"system", "direct"}:
-            raise ValueError(f"sources[{index}].proxy_mode must be system or direct")
+        if "network_route" in item and "proxy_mode" in item and item["network_route"] != item["proxy_mode"]:
+            raise ValueError(f"sources[{index}] network_route conflicts with proxy_mode")
+        if proxy_mode not in {"system", "direct", "explicit"}:
+            raise ValueError(f"sources[{index}].network_route must be system, direct or explicit")
         if type(timeout) is not int or not 1 <= timeout <= 30:
             raise ValueError(f"sources[{index}].request_timeout_seconds must be 1..30")
         if type(attempts) is not int or not 1 <= attempts <= 3:
@@ -224,9 +234,9 @@ def load_sources(path: Path) -> list[SourceDefinition]:
 
 
 def fetch(url: str, timeout: int = 12, allow_hosts: tuple[str, ...] | None = None,
-          *, proxy_mode: str = "system", max_attempts: int = 2) -> str:
+          *, proxy_mode: str = "system", max_attempts: int = 2, source_id: str | None = None) -> str:
     return fetch_response(url, timeout=timeout, allow_hosts=allow_hosts,
-                          proxy_mode=proxy_mode, max_attempts=max_attempts).body
+                          proxy_mode=proxy_mode, max_attempts=max_attempts, source_id=source_id).body
 
 
 @dataclass(frozen=True)
@@ -248,9 +258,42 @@ class _AllowedRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def classify_source_failure(exc: Exception) -> str:
+    """Classify the observed failure without interpreting exception text or proxy URLs."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return "http_error"
+    cause = getattr(exc, "reason", exc)
+    if isinstance(cause, (TimeoutError, socket.timeout)):
+        return "timeout"
+    if isinstance(cause, ssl.SSLError):
+        return "tls_failure"
+    if isinstance(cause, socket.gaierror):
+        return "dns_failure"
+    if isinstance(cause, (ConnectionError, OSError)) and getattr(cause, "errno", None) in {
+        errno.ECONNREFUSED, errno.ECONNRESET, errno.ECONNABORTED,
+        errno.EHOSTUNREACH, errno.ENETUNREACH, 10054, 10060, 10061, 10065,
+    }:
+        return "tcp_connect_failure"
+    return "unknown"
+
+
+def _network_stages(failure_class: str | None, route: str) -> dict[str, str]:
+    if failure_class is None:
+        return {"dns_status": "ok" if route == "direct" else "not_observable",
+                "connect_result": "ok", "tls_result": "ok"}
+    if failure_class == "dns_failure":
+        return {"dns_status": "failed", "connect_result": "not_attempted", "tls_result": "not_attempted"}
+    if failure_class == "tcp_connect_failure":
+        return {"dns_status": "not_observable", "connect_result": "failed", "tls_result": "not_attempted"}
+    if failure_class == "tls_failure":
+        return {"dns_status": "not_observable", "connect_result": "ok", "tls_result": "failed"}
+    return {"dns_status": "not_observable", "connect_result": "not_observable",
+            "tls_result": "not_observable"}
+
+
 def fetch_response(url: str, timeout: int = 12, cached: dict[str, str] | None = None,
                    allow_hosts: tuple[str, ...] | None = None, *, proxy_mode: str = "system",
-                   max_attempts: int = 2) -> FetchResponse:
+                   max_attempts: int = 2, source_id: str | None = None) -> FetchResponse:
     if not _safe_fetch_url(url, allow_hosts):
         raise ValueError(f"Fetch URL is not an allowed HTTPS source: {url}")
     headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xml,text/xml;q=0.9,*/*;q=0.2"}
@@ -260,19 +303,29 @@ def fetch_response(url: str, timeout: int = 12, cached: dict[str, str] | None = 
         if cached.get("last_modified"):
             headers["If-Modified-Since"] = cached["last_modified"]
     request = urllib.request.Request(url, headers=headers)
-    if proxy_mode not in {"system", "direct"} or type(max_attempts) is not int or not 1 <= max_attempts <= 3:
+    if proxy_mode not in {"system", "direct", "explicit"} or type(max_attempts) is not int or not 1 <= max_attempts <= 3:
         raise ValueError("Invalid source network policy")
+    explicit_proxy = None
+    if proxy_mode == "explicit":
+        explicit_proxy = os.environ.get("SOURCE_EXPLICIT_PROXY_URL", "")
+        parsed_proxy = urlparse(explicit_proxy)
+        if parsed_proxy.scheme not in {"http", "https"} or not parsed_proxy.hostname:
+            raise ValueError("Explicit source proxy is not configured")
     history = []
     for attempt in range(1, max_attempts + 1):
         started = time.monotonic()
-        record = {"attempt": attempt, "proxy_mode": proxy_mode, "http_status": None,
+        record = {"source_id": source_id, "attempt": attempt, "retry_count": attempt - 1,
+                  "network_route": proxy_mode, "proxy_mode": proxy_mode, "http_status": None,
                   "exception_type": None, "error_kind": None, "elapsed_ms": None,
-                  "failure_phase": None}
+                  "failure_class": None, "failure_phase": None,
+                  "proxy_configured": (bool(urllib.request.getproxies().get("https"))
+                                       if proxy_mode == "system" else proxy_mode == "explicit")}
         phase = "request_open"
         try:
             # Per-source routing only; does not change process/system proxy or TLS verification.
-            opener = (urllib.request.build_opener(urllib.request.ProxyHandler({}), _AllowedRedirect(allow_hosts))
-                      if proxy_mode == "direct" else None)
+            opener = (urllib.request.build_opener(
+                urllib.request.ProxyHandler({} if proxy_mode == "direct" else {"https": explicit_proxy}),
+                _AllowedRedirect(allow_hosts)) if proxy_mode != "system" else None)
             try:
                 response = opener.open(request, timeout=timeout) if opener else urllib.request.urlopen(request, timeout=timeout)
             except urllib.error.HTTPError as exc:
@@ -281,6 +334,7 @@ def fetch_response(url: str, timeout: int = 12, cached: dict[str, str] | None = 
                     raise
                 exc.close()
                 record["elapsed_ms"] = round((time.monotonic() - started) * 1000, 2)
+                record.update(_network_stages(None, proxy_mode))
                 history.append(record)
                 return FetchResponse(cached["body"], cached.get("etag"), cached.get("last_modified"), True, tuple(history))
             with response:
@@ -299,14 +353,18 @@ def fetch_response(url: str, timeout: int = 12, cached: dict[str, str] | None = 
                     body = raw.decode(response.headers.get_content_charset() or "utf-8", errors="replace")
                     etag, modified = response.headers.get("ETag"), response.headers.get("Last-Modified")
                 record["elapsed_ms"] = round((time.monotonic() - started) * 1000, 2)
+                record.update(_network_stages(None, proxy_mode))
                 history.append(record)
                 return FetchResponse(body, etag, modified, record["http_status"] == 304, tuple(history))
         except Exception as exc:
             cause = getattr(exc, "reason", exc)
+            failure_class = classify_source_failure(exc)
             record.update(exception_type=type(exc).__name__, error_kind=("timeout" if isinstance(cause, TimeoutError) else
                           "tls" if isinstance(cause, ssl.SSLError) else "dns" if isinstance(cause, socket.gaierror) else
                           "http" if isinstance(exc, urllib.error.HTTPError) else "network" if isinstance(exc, urllib.error.URLError) else "other"),
-                          failure_phase=phase, elapsed_ms=round((time.monotonic() - started) * 1000, 2))
+                          failure_class=failure_class, failure_phase=phase,
+                          elapsed_ms=round((time.monotonic() - started) * 1000, 2))
+            record.update(_network_stages(failure_class, proxy_mode))
             history.append(record)
             exc.source_request_history = tuple(history)
             # Existing system-route policy is unchanged; direct sources retry only transient failures.
@@ -519,7 +577,12 @@ def collect_source(source: SourceDefinition, cache: SourceCache | None = None, *
         return SourceCollection((), "disabled")
     cached = cache.get_source_cache(source.source_id, source.url) if cache and source.conditional_requests else None
     response = fetch_response(source.url, cached=cached, **source.fetch_options())
-    items = tuple(ADAPTERS[source.adapter].parse(source, response.body, on_decision=on_decision) if on_decision else ADAPTERS[source.adapter].parse(source, response.body))
+    try:
+        items = tuple(ADAPTERS[source.adapter].parse(source, response.body, on_decision=on_decision) if on_decision else ADAPTERS[source.adapter].parse(source, response.body))
+    except Exception as exc:
+        exc.source_request_history = response.request_history
+        exc.source_parse_failure = True
+        raise
     if cache and not response.not_modified:
         cache.save_source_cache(source.source_id, source.url, response.body, response.etag, response.last_modified)
     return SourceCollection(items, "ok" if items else "empty", response.not_modified,

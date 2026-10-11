@@ -97,7 +97,9 @@ CREATE TABLE IF NOT EXISTS source_health_events (
   status TEXT NOT NULL,
   checked_at TEXT NOT NULL,
   duration_ms REAL,
-  error_kind TEXT
+  error_kind TEXT,
+  network_route TEXT,
+  failure_class TEXT
 );
 CREATE INDEX IF NOT EXISTS source_health_events_source_idx ON source_health_events(source_id, id);
 CREATE TABLE IF NOT EXISTS tech_enrichments (
@@ -135,6 +137,10 @@ class ArticleStore:
                 self.connection.execute(f"ALTER TABLE tech_enrichments ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
         if "fact_schema_json" not in tech_columns:
             self.connection.execute("ALTER TABLE tech_enrichments ADD COLUMN fact_schema_json TEXT NOT NULL DEFAULT '{}'")
+        health_event_columns = {row[1] for row in self.connection.execute("PRAGMA table_info(source_health_events)")}
+        for column in ("network_route", "failure_class"):
+            if column not in health_event_columns:
+                self.connection.execute(f"ALTER TABLE source_health_events ADD COLUMN {column} TEXT")
         self.connection.commit()
 
     def is_known(self, url: str, body_fingerprint: str) -> bool:
@@ -158,7 +164,8 @@ class ArticleStore:
 
     def record_source_health(self, source_id: str, status: str, checked_at: str, items: int,
                              error_summary: str | None = None, *, duration_ms: float | None = None,
-                             error_kind: str | None = None) -> str | None:
+                             error_kind: str | None = None, network_route: str | None = None,
+                             failure_class: str | None = None) -> str | None:
         previous = self.connection.execute("SELECT latest_success_at FROM source_health WHERE source_id = ?", (source_id,)).fetchone()
         latest_success = checked_at if status == "ok" else (previous[0] if previous else None)
         self.connection.execute(
@@ -169,8 +176,10 @@ class ArticleStore:
         )
         if status != "disabled":
             self.connection.execute(
-                "INSERT INTO source_health_events(source_id,status,checked_at,duration_ms,error_kind) VALUES (?,?,?,?,?)",
-                (source_id, status, checked_at, duration_ms, error_kind),
+                """INSERT INTO source_health_events
+                   (source_id,status,checked_at,duration_ms,error_kind,network_route,failure_class)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (source_id, status, checked_at, duration_ms, error_kind, network_route, failure_class),
             )
         self.connection.commit()
         return latest_success
@@ -178,7 +187,8 @@ class ArticleStore:
     def source_health_metrics(self, source_id: str) -> dict[str, object]:
         """Measurements start at instrumentation; never reconstruct missing historical durations."""
         rows = self.connection.execute(
-            "SELECT status,checked_at,duration_ms,error_kind FROM source_health_events WHERE source_id=? ORDER BY id",
+            """SELECT status,checked_at,duration_ms,error_kind,network_route,failure_class
+               FROM source_health_events WHERE source_id=? ORDER BY id""",
             (source_id,),
         ).fetchall()
         durations = sorted(row[2] for row in rows if row[2] is not None)
@@ -196,7 +206,9 @@ class ArticleStore:
                 "p95_duration_ms": durations[math.ceil(0.95 * len(durations)) - 1] if len(durations) >= 20 else None,
                 "last_success_at": previous[0] if previous else None, "consecutive_failures": failures,
                 "sample_count": len(rows), "duration_sample_count": len(durations),
-                "statistics_since": rows[0][1] if rows else None}
+                "statistics_since": rows[0][1] if rows else None,
+                "last_network_route": rows[-1][4] if rows else None,
+                "last_failure_class": rows[-1][5] if rows else None}
 
     def source_health_rows(self) -> dict[str, dict[str, object]]:
         cursor = self.connection.execute("SELECT source_id,status,checked_at,latest_success_at,items,error_summary FROM source_health")

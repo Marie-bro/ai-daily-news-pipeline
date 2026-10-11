@@ -11,7 +11,7 @@ from pathlib import Path
 from .extract import extract_article
 from .diagnostics import failure_details, mark_failure
 from .models import Article, SourceItem
-from .sources import RADAR_TERMS, BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS, SourceDefinition, classify_radar, collect_source, fetch, load_sources
+from .sources import RADAR_TERMS, BLOCKED_CONTENT_HOSTS, BLOCKED_CONTENT_TERMS, SourceDefinition, classify_radar, classify_source_failure, collect_source, fetch, load_sources
 from .store import ArticleStore
 from .text import article_id, fingerprint
 
@@ -126,14 +126,20 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
                 result = collect_source(source, cache, on_decision=audit.parser_event) if audit else collect_source(source, cache)
                 duration_ms = round((time.monotonic() - source_started) * 1000, 2)
                 network_detail = {"duration_ms": duration_ms, "proxy_mode": source.proxy_mode,
+                                  "network_route": source.network_route,
+                                  "retry_count": max(0, len(result.request_history) - 1),
                                   "request_history": list(result.request_history)}
                 source_items.extend(result.items)
                 if audit:
                     audit.source(source.source_id, result.status, len(result.items), {"fetch_method": source.fetch_method, **network_detail})
                     for item in result.items: audit.event(item, "collection", "kept", "parsed_source_item")
-                latest_success = cache.record_source_health(source.source_id, result.status, now.isoformat(), len(result.items), duration_ms=duration_ms) if cache else (now.isoformat() if result.status == "ok" else None)
+                failure_class = "empty" if result.status == "empty" else None
+                latest_success = cache.record_source_health(source.source_id, result.status, now.isoformat(), len(result.items),
+                                                           duration_ms=duration_ms, network_route=source.network_route,
+                                                           failure_class=failure_class) if cache else (now.isoformat() if result.status == "ok" else None)
                 source_health.append({"source_id": source.source_id, "status": result.status,
                                       **network_detail, **(cache.source_health_metrics(source.source_id) if cache else {}),
+                                      "failure_class": failure_class,
                                       "fetch_method": source.fetch_method,
                                       "region": source.region, "tier": source.tier, "source_role": source.source_role,
                                       "channel": list(source.channels), "configured_health": source.health_status,
@@ -142,24 +148,36 @@ def run_collection(root: Path, dry_run: bool, now: datetime | None = None, minim
                                       "checked_at": now.isoformat(), "latest_success_at": latest_success})
             except Exception as exc:  # An unavailable source must not invent replacements.
                 duration_ms = round((time.monotonic() - source_started) * 1000, 2)
+                request_history = list(getattr(exc, "source_request_history", ()))
                 network_detail = {"duration_ms": duration_ms, "proxy_mode": source.proxy_mode,
-                                  "request_history": list(getattr(exc, "source_request_history", ()))}
-                message = f"{source.source_id}: {type(exc).__name__}: {exc}"
-                errors.append(message)
+                                  "network_route": source.network_route,
+                                  "retry_count": max(0, len(request_history) - 1),
+                                  "request_history": request_history}
                 detail = failure_details(exc, "collection")
+                if getattr(exc, "source_parse_failure", False):
+                    failure_class = "parse_failure"
+                else:
+                    failure_class = (request_history[-1].get("failure_class") if request_history else None) or classify_source_failure(exc)
+                observed_http_status = request_history[-1].get("http_status") if request_history else detail["http_status"]
+                message = f"{source.source_id}: {detail['error_type']}: {detail['error_summary']}"
+                errors.append(message)
                 if audit: audit.source(source.source_id, "error", 0, {
                     **network_detail, "fetch_method": source.fetch_method, "error_type": detail["error_type"],
-                    "error_kind": detail["error_kind"], "http_status": detail["http_status"]})
+                    "error_kind": detail["error_kind"], "failure_class": failure_class,
+                    "http_status": observed_http_status})
                 source_errors.append({"source_id": source.source_id, "fetch_method": source.fetch_method,
                                       **network_detail,
-                                      "http_status": detail["http_status"], "error_type": detail["error_type"],
-                                      "error_kind": detail["error_kind"], "error_summary": detail["error_summary"],
+                                      "http_status": observed_http_status, "error_type": detail["error_type"],
+                                      "error_kind": detail["error_kind"], "failure_class": failure_class,
+                                      "error_summary": detail["error_summary"],
                                       "isolated": True})
                 latest_success = cache.record_source_health(source.source_id, "error", now.isoformat(), 0, message,
-                                                           duration_ms=duration_ms, error_kind=detail["error_kind"]) if cache else None
+                                                           duration_ms=duration_ms, error_kind=detail["error_kind"],
+                                                           network_route=source.network_route,
+                                                           failure_class=failure_class) if cache else None
                 source_health.append({"source_id": source.source_id, "status": "error", "items": 0,
                                       **network_detail, **(cache.source_health_metrics(source.source_id) if cache else {}),
-                                      "error_kind": detail["error_kind"],
+                                      "error_kind": detail["error_kind"], "failure_class": failure_class,
                                       "fetch_method": source.fetch_method,
                                       "region": source.region, "tier": source.tier, "source_role": source.source_role,
                                       "channel": list(source.channels), "configured_health": source.health_status,
